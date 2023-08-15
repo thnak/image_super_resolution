@@ -1,5 +1,7 @@
 import torch
+import torchvision
 from torch import nn
+from tqdm import tqdm
 
 from utils.general import fix_problem_with_reuse_activation_funtion, ACT_LIST, autopad
 
@@ -39,32 +41,294 @@ class residual_block_1(nn.Module):
         return self.act(inputs + self.m(inputs))
 
 
-class Model(nn.Module):
+class elan(nn.Module):
+    def __init__(self, in_channels, out_channels, act):
+        super(elan, self).__init__()
+        outs = out_channels // 4
+        self.conv0 = Conv(in_channels, outs, 1, 1, None, act=act)
+        self.conv1 = Conv(in_channels, outs, 1, 1, None, act=act)
+        self.conv2 = Conv(outs, outs, 3, 1, None, act=act)
+        self.conv3 = Conv(outs, outs, 3, 1, None, act=act)
+
+    def forward(self, inputs):
+        output_list = [self.conv0(inputs), self.conv1(inputs)]
+        output_list.append(self.conv2(output_list[1]))
+        output_list.append(self.conv3(output_list[2]))
+        return torch.cat(output_list, 1)
+
+
+def fuse_conv_and_bn(conv, bn):
+    """Fuse convolution and batchnorm layers https://tehnokv.com/posts/fusing-batchnorm-and-conv/"""
+    if isinstance(conv, nn.Conv2d):
+        fused_conv = nn.Conv2d(conv.in_channels,
+                               conv.out_channels,
+                               kernel_size=conv.kernel_size,
+                               stride=conv.stride,
+                               padding=conv.padding,
+                               groups=conv.groups,
+                               bias=True)
+    elif isinstance(conv, nn.Conv1d):
+        fused_conv = nn.Conv1d(conv.in_channels,
+                               conv.out_channels,
+                               kernel_size=conv.kernel_size,
+                               stride=conv.stride,
+                               padding=conv.padding,
+                               groups=conv.groups,
+                               bias=True)
+    else:
+        fused_conv = nn.Conv3d(conv.in_channels,
+                               conv.out_channels,
+                               kernel_size=conv.kernel_size,
+                               stride=conv.stride,
+                               padding=conv.padding,
+                               groups=conv.groups,
+                               bias=True)
+
+    fused_conv = fused_conv.to(conv.weight.device)
+    fused_conv = fused_conv.requires_grad_(False)
+
+    # prepare filters
+    w_conv = conv.weight.clone().view(conv.out_channels, -1)
+    w_bn = torch.diag(bn.weight.div(torch.sqrt(bn.eps + bn.running_var)))
+    fused_conv.weight.copy_(torch.mm(w_bn, w_conv).view(fused_conv.weight.shape))
+
+    # prepare spatial bias
+    b_conv = torch.zeros(conv.weight.size(0), device=conv.weight.device) if conv.bias is None else conv.bias
+    b_bn = bn.bias - bn.weight.mul(bn.running_mean).div(torch.sqrt(bn.running_var + bn.eps))
+    fused_conv.bias.copy_(torch.mm(w_bn, b_conv.reshape(-1, 1)).reshape(-1) + b_bn)
+
+    return fused_conv
+
+
+class Convert_tanh_value_norm(nn.Module):
+    def __init__(self, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
+        super().__init__()
+        mean = torch.tensor(mean).unsqueeze(0).unsqueeze(2).unsqueeze(3)
+        std = torch.tensor(std).unsqueeze(0).unsqueeze(2).unsqueeze(3)
+        self.register_buffer("mean", mean)
+        self.register_buffer("std", std)
+
+    def forward(self, inputs: torch.Tensor):
+        dtype, device = inputs.dtype, inputs.device
+        n_dims = inputs.ndimension()
+        inputs = (inputs + 1) / 2
+        inputs -= self.mean.to(device=device)
+        inputs /= self.std.to(device=device)
+        return inputs
+
+
+class Convert_tanh_pil(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv0 = Conv(3, 64, 9, 1, None, act=nn.LeakyReLU())
-        residual = [Conv(64, 64, 3, 1, None, act=nn.LeakyReLU())] * 16
+        from torchvision.transforms.functional import to_pil_image
+        self.to_pil_image = to_pil_image
+
+    def forward(self, inputs: torch.Tensor):
+        n_dims = inputs.dim()
+        inputs = (inputs + 1.) / 2.
+        outputs = []
+        if n_dims == 4:
+            batch = inputs.size(0)
+            for x in range(batch):
+                outputs.append(self.to_pil_image(inputs[x, ...]))
+        elif n_dims == 3:
+            outputs.append(self.to_pil_image(inputs))
+        else:
+            raise f"only support 3 & 4 dimension, your {n_dims}"
+        return outputs
+
+
+class TruncatedVGG19(nn.Module):
+    """
+    A truncated VGG19 network, such that its output is the 'feature map obtained by the j-th convolution (after activation)
+    before the i-th maxpooling layer within the VGG19 network', as defined in the paper.
+
+    Used to calculate the MSE loss in this VGG feature-space, i.e. the VGG loss.
+    """
+
+    def __init__(self, i, j):
+        """
+        :param i: the index i in the definition above
+        :param j: the index j in the definition above
+        """
+        super(TruncatedVGG19, self).__init__()
+
+        # Load the pre-trained VGG19 available in torchvision
+        from torchvision.models import VGG19_Weights
+        vgg19 = torchvision.models.vgg19(weights=VGG19_Weights.IMAGENET1K_V1)
+
+        maxpool_counter = 0
+        conv_counter = 0
+        truncate_at = 0
+        # Iterate through the convolutional section ("features") of the VGG19
+        for layer in vgg19.features.children():
+            truncate_at += 1
+
+            # Count the number of maxpool layers and the convolutional layers after each maxpool
+            if isinstance(layer, nn.Conv2d):
+                conv_counter += 1
+            if isinstance(layer, nn.MaxPool2d):
+                maxpool_counter += 1
+                conv_counter = 0
+
+            # Break if we reach the jth convolution after the (i - 1)th maxpool
+            if maxpool_counter == i - 1 and conv_counter == j:
+                break
+
+        # Check if conditions were satisfied
+        if not (maxpool_counter == i - 1 and conv_counter == j):
+            raise "One or both of i=%d and j=%d are not valid choices for the VGG19!" % (i, j)
+
+        # Truncate to the jth convolution (+ activation) before the ith maxpool layer
+        self.truncated_vgg19 = nn.Sequential(*list(vgg19.features.children())[:truncate_at + 1])
+
+    def forward(self, inputs: torch.Tensor):
+        """
+        Forward propagation
+        :param inputs: high-resolution or super-resolution images, a tensor of size (N, 3, w * scaling factor, h * scaling factor)
+        :return: the specified VGG19 feature map, a tensor of size (N, feature_map_channels, feature_map_w, feature_map_h)
+        """
+        output = self.truncated_vgg19(inputs)  # (N, feature_map_channels, feature_map_w, feature_map_h)
+
+        return output
+
+
+class Discriminator(nn.Module):
+    """
+    The discriminator in the SRGAN, as defined in the paper.
+    """
+
+    def __init__(self, kernel_size=3, n_channels=64, n_blocks=8, fc_size=1024):
+        """
+        A series of convolutional blocks
+        The first, third, fifth (and so on) convolutional blocks increase the number of channels but retain image size
+        The second, fourth, sixth (and so on) convolutional blocks retain the same number of channels but halve image size
+        The first convolutional block is unique because it does not employ batch normalization
+        :param kernel_size: kernel size in all convolutional blocks
+        :param n_channels: number of output channels in the first convolutional block, after which it is doubled in every 2nd block thereafter
+        :param n_blocks: number of convolutional blocks
+        :param fc_size: size of the first fully connected layer
+        """
+        super(Discriminator, self).__init__()
+        in_channels = 3
+        conv_blocks = []
+        out_channels = 0
+        for i in range(n_blocks):
+            out_channels = (n_channels if i == 0 else in_channels * 2) if i % 2 == 0 else in_channels
+            conv_blocks.append(Conv(in_channels, out_channels, kernel_size, 1, None, act=nn.LeakyReLU()))
+            in_channels = out_channels
+        self.conv_blocks = nn.Sequential(*conv_blocks)
+
+        # An adaptive pool layer that resizes it to a standard size
+        # For the default input size of 96 and 8 convolutional blocks, this will have no effect
+        self.adaptive_pool = nn.AdaptiveAvgPool2d((6, 6))
+        self.fc1 = nn.Linear(out_channels * 6 * 6, fc_size)
+        self.leaky_relu = nn.LeakyReLU(0.2)
+        self.fc2 = nn.Linear(1024, 1)
+
+    def forward(self, inputs):
+        """
+        Forward propagation.
+
+        :param inputs: high-resolution or super-resolution images which must be classified as
+        such, a tensor of size (N, 3, w * scaling factor, h * scaling factor)
+        :return: a score (logit) for whether it is a high-resolution image, a tensor of size (N)
+        """
+        batch_size = inputs.size(0)
+        output = self.conv_blocks(inputs)
+        output = self.adaptive_pool(output)
+        output = self.fc1(output.view(batch_size, -1))
+        output = self.leaky_relu(output)
+        return self.fc2(output)
+
+
+class Model(nn.Module):
+    def __init__(self):
+        super(Model, self).__init__()
+        self.conv0 = nn.Sequential(Conv(3, 32, 9, 1, None, act=nn.LeakyReLU()),
+                                   elan(32, 64, nn.LeakyReLU()))
+
+        residual = [residual_block_1(64, 64, 256, 1, act=nn.LeakyReLU())] * 16
         self.residual = nn.Sequential(*residual)
         self.subpixel_convolutional_blocks0 = Conv(64, 256, 3, 1, None, act=False)
         self.shuffle0 = nn.PixelShuffle(2)
         self.subpixel_convolutional_blocks1 = Conv(64, 256, 3, 1, None, act=False)
         self.shuffle1 = nn.PixelShuffle(2)
         self.conv1 = Conv(64, 3, 9, 1, None, act=nn.Tanh())
+        self.act = nn.LeakyReLU()
 
     def forward(self, inputs: torch.Tensor):
         inputs = self.conv0(inputs)
         inputs = inputs + self.residual(inputs)
         inputs = self.subpixel_convolutional_blocks0(inputs)
         inputs = self.shuffle0(inputs)
+        inputs = self.act(inputs)
         inputs = self.subpixel_convolutional_blocks1(inputs)
         inputs = self.shuffle1(inputs)
+        inputs = self.act(inputs)
         inputs = self.conv1(inputs)
         return inputs
 
+    def fuse(self):
+        """fuse model Conv2d() + BatchNorm2d() layers, fuse Conv2d + im"""
+        prefix = "Fusing layers... "
+        p_bar = tqdm(self.modules(), desc=f'{prefix}', unit=" layer")
+        for m in p_bar:
+            p_bar.set_description_str(f"fusing {m.__class__.__name__}")
+            if isinstance(m, Conv):
+                if hasattr(m, "bn"):
+                    m.conv = fuse_conv_and_bn(m.conv, m.bn)
+                    m.forward = m.fuseforward
+                    delattr(m, 'bn')
+                    if hasattr(m, "drop"):
+                        delattr(m, "drop")
+        return self
+
+
+class SRGAN(nn.Module):
+
+    def __init__(self):
+        super().__init__()
+        self.net = Model()
+        self.tanh_to_norm = Convert_tanh_value_norm()
+
+    def forward(self, inputs: torch.Tensor):
+        inputs = self.net(inputs)
+        if self.training:
+            inputs = self.tanh_to_norm(inputs)
+        return inputs
+
+    def fuse(self):
+        """fuse model Conv2d() + BatchNorm2d() layers, fuse Conv2d + im"""
+        prefix = "Fusing layers... "
+        p_bar = tqdm(self.modules(), desc=f'{prefix}', unit=" layer")
+        for m in p_bar:
+            p_bar.set_description_str(f"fusing {m.__class__.__name__}")
+            if isinstance(m, Conv):
+                if hasattr(m, "bn"):
+                    m.conv = fuse_conv_and_bn(m.conv, m.bn)
+                    m.forward = m.fuseforward
+                    delattr(m, 'bn')
+                    if hasattr(m, "drop"):
+                        delattr(m, "drop")
+        return self
+
 
 if __name__ == '__main__':
-    model = Model()
-    model.eval()
+    model = SRGAN()
+    # model.eval().fuse()
     feed = torch.zeros([1, 3, 96, 96])
-    feed = model(feed)
+    ckpt = torch.load("/home/thanh/Documents/github/image_super_resolution/best_fitness_9.pt", "cpu")
+    model.net.load_state_dict(ckpt['model'])
+    model.eval().fuse()
+    # feed = model(feed)
+    jit_m = torch.jit.trace(model, feed)
+    torch.jit.save(jit_m, "model.pt")
+    torch.onnx.export(model, feed, "model.onnx")
+    import onnx
+    from onnxsim import simplify
+
+    onnx_model = onnx.load('model.onnx')
+    onnx_model, c = simplify(onnx_model)
+    onnx.save(onnx_model, "model.onnx")
     print(feed.shape)

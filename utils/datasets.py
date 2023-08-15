@@ -3,13 +3,13 @@ import random
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.nn import Module
-from torchvision.transforms import Compose, InterpolationMode, Lambda
+from torchvision.transforms import InterpolationMode, Lambda, Compose
 import torchvision.transforms.functional as T
 from torchvision.io import read_image, ImageReadMode
 import json
 import numpy as np
 from pathlib import Path
-from general import ground_up
+from utils.general import ground_up
 
 
 class Random_low_rs(Module):
@@ -22,11 +22,13 @@ class Random_low_rs(Module):
         self.input_shape = input_shape
 
     def forward(self, inputs):
-        size = self.input_shape / self.scale_factor
+        size = int(self.input_shape / self.scale_factor)
         if random.random() < 1 / 3:
             inputs = inputs[:, ::self.scale_factor, ::self.scale_factor]
         else:
-            inputs = T.resize(inputs, [size] * 2, self.BILINEAR if random.random() < 0.5 else self.BICUBIC)
+            inputs = T.resize(inputs, [size, size],
+                              self.BILINEAR if random.random() < 0.5 else self.BICUBIC,
+                              antialias=False)
         return inputs
 
 
@@ -155,16 +157,14 @@ class SR_dataset(Dataset):
         self.target_size = target_size
         self.scale_factor = scales_factor
         self.crop = Random_position(target_size=target_size)
-        self.transform_lr = Normalize(mean=self.mean, std=self.std)
+        self.transform_lr = Compose([Random_low_rs(target_size, scales_factor),
+                                     Normalize(mean=self.mean, std=self.std)])
         self.transform_hr = Lambda(lambd=lambda x: 2. * (x / 255.) - 1)
 
     def __getitem__(self, item):
         image = read_image(self.samples[item], ImageReadMode.RGB)  # CHW
         image = self.crop(image)
-        high_rs_image = self.transform_hr(image)
-        low_rs_image = image[:, ::self.scale_factor, ::self.scale_factor]
-        low_rs_image = self.transform_lr(low_rs_image)
-        return high_rs_image, low_rs_image
+        return self.transform_hr(image), self.transform_lr(image)
 
     def __len__(self):
         return len(self.samples)
