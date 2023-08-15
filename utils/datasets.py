@@ -159,7 +159,11 @@ class SR_dataset(Dataset):
         self.crop = Random_position(target_size=target_size)
         self.transform_lr = Compose([Random_low_rs(target_size, scales_factor),
                                      Normalize(mean=self.mean, std=self.std)])
-        self.transform_hr = Lambda(lambd=lambda x: 2. * (x / 255.) - 1)
+        self.transform_hr = Lambda(lambd=lambda x: 2. * (x / 255.) - 1)  # tanh
+
+    def set_transform_hr(self):
+        """set transform for srgen"""
+        self.transform_hr = Normalize(self.mean, self.std)
 
     def __getitem__(self, item):
         image = read_image(self.samples[item], ImageReadMode.RGB)  # CHW

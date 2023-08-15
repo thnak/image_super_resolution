@@ -33,8 +33,7 @@ class residual_block_1(nn.Module):
         super(residual_block_1, self).__init__()
         act = fix_problem_with_reuse_activation_funtion(act)
         self.m = nn.Sequential(Conv(in_channel, hidden_channel, kernel, 1, None, act=act),
-                               Conv(hidden_channel, hidden_channel, 3, 1, None, act=act),
-                               Conv(hidden_channel, out_channel, 1, 1, None, act=False))
+                               Conv(hidden_channel, out_channel, kernel, 1, None, act=False))
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, inputs: torch.Tensor):
@@ -109,11 +108,9 @@ class Convert_tanh_value_norm(nn.Module):
         self.register_buffer("std", std)
 
     def forward(self, inputs: torch.Tensor):
-        dtype, device = inputs.dtype, inputs.device
-        n_dims = inputs.ndimension()
         inputs = (inputs + 1) / 2
-        inputs -= self.mean.to(device=device)
-        inputs /= self.std.to(device=device)
+        inputs -= self.mean
+        inputs /= self.std
         return inputs
 
 
@@ -245,28 +242,28 @@ class Discriminator(nn.Module):
 class Model(nn.Module):
     def __init__(self):
         super(Model, self).__init__()
-        self.conv0 = nn.Sequential(Conv(3, 32, 9, 1, None, act=nn.LeakyReLU()),
-                                   elan(32, 64, nn.LeakyReLU()))
-
-        residual = [residual_block_1(64, 64, 256, 1, act=nn.LeakyReLU())] * 16
+        self.conv0 = nn.Sequential(Conv(3, 32, 9, 1, None, act=nn.PReLU()),
+                                   elan(32, 64, act=nn.PReLU()))
+        residual = [residual_block_1(64, 64, 64, 3, act=nn.PReLU()) for x in range(16)]
         self.residual = nn.Sequential(*residual)
+        self.conv1 = Conv(64, 64, 3, 1, None, act=False)
         self.subpixel_convolutional_blocks0 = Conv(64, 256, 3, 1, None, act=False)
         self.shuffle0 = nn.PixelShuffle(2)
         self.subpixel_convolutional_blocks1 = Conv(64, 256, 3, 1, None, act=False)
         self.shuffle1 = nn.PixelShuffle(2)
-        self.conv1 = Conv(64, 3, 9, 1, None, act=nn.Tanh())
-        self.act = nn.LeakyReLU()
+        self.conv3 = Conv(64, 3, 9, 1, None, act=nn.Tanh())
+        self.act = nn.PReLU()
 
     def forward(self, inputs: torch.Tensor):
         inputs = self.conv0(inputs)
-        inputs = inputs + self.residual(inputs)
+        inputs = inputs + self.conv1(self.residual(inputs))
         inputs = self.subpixel_convolutional_blocks0(inputs)
         inputs = self.shuffle0(inputs)
         inputs = self.act(inputs)
         inputs = self.subpixel_convolutional_blocks1(inputs)
         inputs = self.shuffle1(inputs)
         inputs = self.act(inputs)
-        inputs = self.conv1(inputs)
+        inputs = self.conv3(inputs)
         return inputs
 
     def fuse(self):
@@ -318,9 +315,11 @@ if __name__ == '__main__':
     model = SRGAN()
     # model.eval().fuse()
     feed = torch.zeros([1, 3, 96, 96])
-    ckpt = torch.load("/home/thanh/Documents/github/image_super_resolution/best_fitness_9.pt", "cpu")
-    model.net.load_state_dict(ckpt['model'])
+    # ckpt = torch.load("/home/thanh/Documents/github/image_super_resolution/best_fitness_0.pt", "cpu")
+    # model.load_state_dict(ckpt['gen_net'])
     model.eval().fuse()
+    n_p = sum([x.numel() for x in model.parameters()])
+    print(f"{n_p:,}")
     # feed = model(feed)
     jit_m = torch.jit.trace(model, feed)
     torch.jit.save(jit_m, "model.pt")

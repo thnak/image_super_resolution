@@ -63,6 +63,7 @@ def train_srgan(gen_net: SRGAN, dis_net: Discriminator, dataloader, content_loss
     loss_d = []
     loss_content = []
     loss_adv = []
+
     device = next(gen_net.parameters()).device
     pbar = tqdm(dataloader, total=len(dataloader))
     for idx, (hr_images, lr_images) in enumerate(pbar):
@@ -110,11 +111,14 @@ if __name__ == '__main__':
     lr = 1e-4
     epochs = 300
     dataset = SR_dataset(json_file, 96, 4, "Train: ")
+    dataset.set_transform_hr()
     dataloader = init_dataloader(dataset, batch_size=64, num_worker=4)[0]
-    optimizer_g = torch.optim.Adam(params=filter(lambda p: p.requires_grad, gen_net.parameters()),
-                                   lr=lr)
-    optimizer_d = torch.optim.Adam(params=filter(lambda p: p.requires_grad, dis_net.parameters()),
-                                   lr=lr)
+    for x in gen_net.parameters():
+        x.requires_grad = True
+    for x in dis_net.parameters():
+        x.requires_grad = True
+    optimizer_g = torch.optim.Adam(params=gen_net.parameters(), lr=lr)
+    optimizer_d = torch.optim.Adam(params=dis_net.parameters(), lr=lr)
 
     scaler = GradScaler(enabled=device.type == 'cuda')
 
@@ -126,14 +130,14 @@ if __name__ == '__main__':
         dis_net.load_state_dict(ckpt["dis_net"])
         optimizer_g.load_state_dict(ckpt['optimizer_g'])
         optimizer_d.load_state_dict(ckpt['optimizer_d'])
-        start_epoch = ckpt.get('epoch', 0)
+        start_epoch = ckpt['epoch'] + 1
+        del ckpt
 
     content_loss_compute = Content_Loss()
     adv_loss_compute = Adversarial()
     gen_net.to(device)
     dis_net.to(device)
-    content_loss_compute.to(device).eval()
-    adv_loss_compute.to(device).eval()
+
     optimizer_to(optimizer_g, device)
     optimizer_to(optimizer_d, device)
     best_fitness = 1000
