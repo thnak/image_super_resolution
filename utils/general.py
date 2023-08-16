@@ -10,7 +10,8 @@ ACT_LIST = (nn.LeakyReLU, nn.Hardswish, nn.ReLU, nn.ReLU6,
             nn.Softmax, nn.Hardsigmoid, nn.GELU, nn.Softsign, nn.Softplus)
 IMG_FORMATS = ['.bmp', '.jpg', '.jpeg', '.png', '.tif', '.tiff', '.dng', '.webp', '.mpo', '.pfm', '.jpg', '.jpeg',
                '.png', '.ppm', '.bmp', '.pgm', '.tif', '.tiff', '.webp']  # acceptable image suffixes
-
+VID_FORMATS = ['.asf', '.mov', '.avi', '.mp4', '.mpg', '.mpeg', '.m4v', '.wmv', '.mkv',
+               '.gif']
 
 def ground_up(intput_number, stride):
     if intput_number % stride == 0:

@@ -32,12 +32,28 @@ class residual_block_1(nn.Module):
     def __init__(self, in_channel: int, out_channel: int, hidden_channel: int, kernel: any, act: any):
         super(residual_block_1, self).__init__()
         act = fix_problem_with_reuse_activation_funtion(act)
-        self.m = nn.Sequential(Conv(in_channel, hidden_channel, kernel, 1, None, act=act),
-                               Conv(hidden_channel, out_channel, kernel, 1, None, act=False))
-        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
+        self.m = nn.Sequential(
+            Conv(in_channel, hidden_channel, kernel, 1, None, act=act),
+            Conv(hidden_channel, hidden_channel, 3, 1, None, act=act),
+            Conv(hidden_channel, out_channel, 3, 1, None, act=False))
+        self.act = nn.Identity()
 
     def forward(self, inputs: torch.Tensor):
         return self.act(inputs + self.m(inputs))
+
+
+class residual_block_2(nn.Module):
+    def __init__(self, in_channel: int, out_channel: int, hidden_channel: int, kernel: any, act: any):
+        super(residual_block_2, self).__init__()
+        act = fix_problem_with_reuse_activation_funtion(act)
+        self.m = nn.Sequential(Conv(in_channel, hidden_channel, kernel, 1, None, act=act),
+                               Conv(hidden_channel, hidden_channel, 3, 1, None, act=act),
+                               Conv(hidden_channel, out_channel, 1, 1, None, act=False))
+        self.m1 = Conv(in_channel, out_channel, 1, 1, None, act=False)
+        self.act = nn.Identity()
+
+    def forward(self, inputs: torch.Tensor):
+        return self.act(self.m1(inputs) + self.m(inputs))
 
 
 class elan(nn.Module):
@@ -108,13 +124,13 @@ class Convert_tanh_value_norm(nn.Module):
         self.register_buffer("std", std)
 
     def forward(self, inputs: torch.Tensor):
-        inputs = (inputs + 1) / 2
+        inputs = (inputs + 1.) / 2.
         inputs -= self.mean
         inputs /= self.std
         return inputs
 
 
-class Convert_tanh_pil(nn.Module):
+class Tanh_to_PIL(nn.Module):
     def __init__(self):
         super().__init__()
         from torchvision.transforms.functional import to_pil_image
@@ -133,6 +149,17 @@ class Convert_tanh_pil(nn.Module):
         else:
             raise f"only support 3 & 4 dimension, your {n_dims}"
         return outputs
+
+
+class Tanh_to_ImageArray(nn.Module):
+    def __init__(self, max_pixel_value=255.):
+        super().__init__()
+        self.register_buffer("max_pixel_value", torch.tensor(max_pixel_value))
+
+    def forward(self, inputs):
+        inputs = (inputs + 1.) / 2.
+        inputs *= self.max_pixel_value
+        return inputs.round().to(torch.uint8)
 
 
 class TruncatedVGG19(nn.Module):
@@ -242,9 +269,10 @@ class Discriminator(nn.Module):
 class Model(nn.Module):
     def __init__(self):
         super(Model, self).__init__()
-        self.conv0 = nn.Sequential(Conv(3, 32, 9, 1, None, act=nn.PReLU()),
-                                   elan(32, 64, act=nn.PReLU()))
-        residual = [residual_block_1(64, 64, 64, 3, act=nn.PReLU()) for x in range(16)]
+        self.conv0 = nn.Sequential(Conv(3, 64, 9, 1, None, act=nn.PReLU()),
+                                   # elan(32, 64, act=nn.PReLU())
+                                   )
+        residual = [residual_block_1(64, 64, 128, 3, act=nn.LeakyReLU(0.2)) for x in range(16)]
         self.residual = nn.Sequential(*residual)
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
         self.subpixel_convolutional_blocks0 = Conv(64, 256, 3, 1, None, act=False)
@@ -311,16 +339,29 @@ class SRGAN(nn.Module):
         return self
 
 
+def intersect_dicts(da, db, exclude=()):
+    """Dictionary intersection of matching keys and shapes, omitting 'exclude' keys, using da values"""
+    return {k: v for k, v in da.items() if k in db and not any(x in k for x in exclude) and v.shape == db[k].shape}
+
+
 if __name__ == '__main__':
-    model = SRGAN()
+    model = Model()
     # model.eval().fuse()
     feed = torch.zeros([1, 3, 96, 96])
-    # ckpt = torch.load("/home/thanh/Documents/github/image_super_resolution/best_fitness_0.pt", "cpu")
-    # model.load_state_dict(ckpt['gen_net'])
-    model.eval().fuse()
+    ckpt = torch.load("/home/thanh/Documents/github/image_super_resolution/best_fitness_31.pt", "cpu")
+    model.load_state_dict(ckpt['model'])
+    for x in model.parameters():
+        x.requires_grad = False
+    model.train().fuse()
+
     n_p = sum([x.numel() for x in model.parameters()])
     print(f"{n_p:,}")
-    # feed = model(feed)
+    from time import perf_counter
+
+    t0 = perf_counter()
+    for x in range(10):
+        model(feed)
+    print(f"times: {perf_counter() - t0}")
     jit_m = torch.jit.trace(model, feed)
     torch.jit.save(jit_m, "model.pt")
     torch.onnx.export(model, feed, "model.onnx")

@@ -7,7 +7,6 @@ from torchvision.transforms import InterpolationMode, Lambda, Compose
 import torchvision.transforms.functional as T
 from torchvision.io import read_image, ImageReadMode
 import json
-import numpy as np
 from pathlib import Path
 from utils.general import ground_up
 
@@ -23,11 +22,12 @@ class Random_low_rs(Module):
 
     def forward(self, inputs):
         size = int(self.input_shape / self.scale_factor)
-        if random.random() < 1 / 3:
+        random_value = random.random()
+        if random_value < 1 / 3:
             inputs = inputs[:, ::self.scale_factor, ::self.scale_factor]
         else:
             inputs = T.resize(inputs, [size, size],
-                              self.BILINEAR if random.random() < 0.5 else self.BICUBIC,
+                              self.BILINEAR if random_value < 2 / 3 else self.BICUBIC,
                               antialias=False)
         return inputs
 
@@ -48,34 +48,55 @@ class Random_position(Module):
 
 
 class Normalize(Module):
-    """input int tensor in NCHW or CHW format and return the same format"""
+    """return value from torch Tensor PIL image to norm"""
 
-    def __init__(self,
-                 mean: tuple[float, float, float] | tuple[float] | list[float, float, float] | list[float],
-                 std: tuple[float, float, float] | tuple[float] | list[float, float, float] | list[float],
-                 pixel_max_value=255.):
-        super(Normalize, self).__init__()
-        self.pixel_max_value = pixel_max_value
-        self.mean = mean
-        self.std = std
+    def __init__(self, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], max_pixel_value=255., dim=3):
+        super().__init__()
+        if dim == 4:
+            mean = torch.tensor(mean).unsqueeze(0).unsqueeze(2).unsqueeze(3)
+            std = torch.tensor(std).unsqueeze(0).unsqueeze(2).unsqueeze(3)
+        else:
+            mean = torch.tensor(mean).unsqueeze(1).unsqueeze(2)
+            std = torch.tensor(std).unsqueeze(1).unsqueeze(2)
+        self.register_buffer("mean", mean)
+        self.register_buffer("std", std)
+        self.register_buffer("max_pixel_value", torch.tensor(max_pixel_value))
 
     def forward(self, inputs: torch.Tensor):
-        n_dims = inputs.dim()
         inputs = inputs.float()
-        inputs /= self.pixel_max_value
-        if n_dims == 4:
-            n_dept, c, h, w = inputs.shape
-            assert c == len(self.mean), f"len of self.mean ({len(self.mean)}) must be equal to image channel ({c})"
-            for n in range(n_dept):
-                for x in range(c):
-                    inputs[n, x, ...] = (inputs[n, x, ...] - self.mean[x]) / self.std[x]
-        elif n_dims == 3:
-            c, h, w = inputs.shape
-            assert c == len(self.mean), f"len of self.mean ({len(self.mean)}) must be equal to image channel ({c})"
-            for x in range(c):
-                inputs[x, ...] = (inputs[x, ...] - self.mean[x]) / self.std[x]
+        inputs /= self.max_pixel_value
+        inputs -= self.mean
+        inputs /= self.std
+        return inputs
+
+
+class PIL_to_tanh(Module):
+    def __init__(self, max_pixel_value=255.):
+        super().__init__()
+        self.register_buffer("max_pixel_value", torch.tensor(max_pixel_value))
+
+    def forward(self, inputs):
+        if inputs.dtype == torch.uint8:
+            inputs = inputs.float()
+        inputs /= self.max_pixel_value
+        return 2. * inputs - 1
+
+
+class RGB2BGR(Module):
+    def __init__(self):
+        super().__init__()
+
+    @staticmethod
+    def forward(inputs):
+        dim = inputs.dim()
+        if dim == 3:
+            r, g, b = inputs[0, ...], inputs[1, ...], inputs[2, ...]
+            inputs = torch.stack([b, g, r])
+        elif dim == 4:
+            r, g, b = inputs[..., 0, :, :], inputs[..., 1, :, :], inputs[..., 2, :, :]
+            inputs = torch.stack([b, g, r], dim=1)
         else:
-            raise f"inputs tensor must be 3 or 4 dimension, got {n_dims}"
+            raise f"not support {dim} channel input"
         return inputs
 
 
@@ -145,8 +166,8 @@ class ColorJiter(Module):
 
 
 class SR_dataset(Dataset):
-    mean = (0.485, 0.456, 0.406)
-    std = (0.229, 0.224, 0.225)
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
 
     def __init__(self, json_path, target_size, scales_factor, prefix=""):
         json_path = json_path if isinstance(json_path, Path) else Path(json_path)
@@ -159,7 +180,7 @@ class SR_dataset(Dataset):
         self.crop = Random_position(target_size=target_size)
         self.transform_lr = Compose([Random_low_rs(target_size, scales_factor),
                                      Normalize(mean=self.mean, std=self.std)])
-        self.transform_hr = Lambda(lambd=lambda x: 2. * (x / 255.) - 1)  # tanh
+        self.transform_hr = PIL_to_tanh()  # - > tanh
 
     def set_transform_hr(self):
         """set transform for srgen"""
