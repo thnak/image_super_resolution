@@ -8,8 +8,7 @@ from termcolor import colored
 try:
     from pyadl import *
 except Exception as ex:
-    print(ex)
-
+    pass
 
 def getGPUtype():
     try:
