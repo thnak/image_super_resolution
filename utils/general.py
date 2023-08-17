@@ -13,6 +13,7 @@ IMG_FORMATS = ['.bmp', '.jpg', '.jpeg', '.png', '.tif', '.tiff', '.dng', '.webp'
 VID_FORMATS = ['.asf', '.mov', '.avi', '.mp4', '.mpg', '.mpeg', '.m4v', '.wmv', '.mkv',
                '.gif']
 
+
 def ground_up(intput_number, stride):
     if intput_number % stride == 0:
         return intput_number
@@ -85,3 +86,8 @@ def create_data_lists(train_folders, test_folders, min_size, output_folder="./")
         json.dump(train_images, j)
 
     print("JSONS containing lists of Train and Test images have been saved to %s\n" % save_dir.as_posix())
+
+
+def intersect_dicts(da, db, exclude=()):
+    """Dictionary intersection of matching keys and shapes, omitting 'exclude' keys, using da values"""
+    return {k: v for k, v in da.items() if k in db and not any(x in k for x in exclude) and v.shape == db[k].shape}

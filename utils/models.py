@@ -33,9 +33,9 @@ class residual_block_1(nn.Module):
         super(residual_block_1, self).__init__()
         act = fix_problem_with_reuse_activation_funtion(act)
         self.m = nn.Sequential(
-            Conv(in_channel, hidden_channel, kernel, 1, None, act=act),
-            Conv(hidden_channel, hidden_channel, 3, 1, None, act=act),
-            Conv(hidden_channel, out_channel, 3, 1, None, act=False))
+            Conv(in_channel, hidden_channel, 1, 1, None, act=act),
+            Conv(hidden_channel, hidden_channel, kernel, 1, None, act=act),
+            Conv(hidden_channel, out_channel, 1, 1, None, act=False))
         self.act = nn.Identity()
 
     def forward(self, inputs: torch.Tensor):
@@ -46,26 +46,28 @@ class residual_block_2(nn.Module):
     def __init__(self, in_channel: int, out_channel: int, hidden_channel: int, kernel: any, act: any):
         super(residual_block_2, self).__init__()
         act = fix_problem_with_reuse_activation_funtion(act)
-        self.m = nn.Sequential(Conv(in_channel, hidden_channel, kernel, 1, None, act=act),
-                               Conv(hidden_channel, hidden_channel, 3, 1, None, act=act),
+        self.m = nn.Sequential(Conv(in_channel, hidden_channel, 1, 1, None, act=act),
+                               Conv(hidden_channel, hidden_channel, kernel, 1, None, act=act),
                                Conv(hidden_channel, out_channel, 1, 1, None, act=False))
         self.m1 = Conv(in_channel, out_channel, 1, 1, None, act=False)
-        self.act = nn.Identity()
+        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, inputs: torch.Tensor):
         return self.act(self.m1(inputs) + self.m(inputs))
 
 
 class elan(nn.Module):
-    def __init__(self, in_channels, out_channels, act):
+    def __init__(self, in_channels, out_channels, act, dropout=0.):
         super(elan, self).__init__()
         outs = out_channels // 4
+        self.drop = nn.Dropout(dropout)
         self.conv0 = Conv(in_channels, outs, 1, 1, None, act=act)
         self.conv1 = Conv(in_channels, outs, 1, 1, None, act=act)
         self.conv2 = Conv(outs, outs, 3, 1, None, act=act)
         self.conv3 = Conv(outs, outs, 3, 1, None, act=act)
 
     def forward(self, inputs):
+        inputs = self.drop(inputs)
         output_list = [self.conv0(inputs), self.conv1(inputs)]
         output_list.append(self.conv2(output_list[1]))
         output_list.append(self.conv3(output_list[2]))
@@ -266,55 +268,46 @@ class Discriminator(nn.Module):
         return self.fc2(output)
 
 
-class Model(nn.Module):
-    def __init__(self):
-        super(Model, self).__init__()
-        self.conv0 = nn.Sequential(Conv(3, 64, 9, 1, None, act=nn.PReLU()),
-                                   # elan(32, 64, act=nn.PReLU())
-                                   )
-        residual = [residual_block_1(64, 64, 128, 3, act=nn.LeakyReLU(0.2)) for x in range(16)]
+class Scaler(nn.Module):
+    def __init__(self, in_channel, out_channel, scale_factor, kernel_size, act):
+        super().__init__()
+        act = fix_problem_with_reuse_activation_funtion(act)
+        scaler = [Conv(in_channel, out_channel * (scale_factor ** 2), kernel_size, 1, None, act=False),
+                  nn.PixelShuffle(scale_factor), act]
+
+        self.net = nn.Sequential(*scaler)
+
+    def forward(self, inputs: torch.Tensor):
+        return self.net(inputs)
+
+
+class ResNet(nn.Module):
+    def __init__(self, num_block_resnet=16):
+        super(ResNet, self).__init__()
+
+        self.conv0 = nn.Sequential(Conv(3, 64, 9, 1, act=False, dropout=0.01))
+        residual = [residual_block_1(64, 64,
+                                     128, 3,
+                                     act=nn.PReLU()) for x in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
+
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
-        self.subpixel_convolutional_blocks0 = Conv(64, 256, 3, 1, None, act=False)
-        self.shuffle0 = nn.PixelShuffle(2)
-        self.subpixel_convolutional_blocks1 = Conv(64, 256, 3, 1, None, act=False)
-        self.shuffle1 = nn.PixelShuffle(2)
-        self.conv3 = Conv(64, 3, 9, 1, None, act=nn.Tanh())
-        self.act = nn.PReLU()
+        self.scaler = nn.Sequential(*[Scaler(64, 64, 2, 3, nn.PReLU()) for x in range(2)])
+        self.conv2 = nn.Sequential(Conv(64, 3, 9, 1, act=nn.Tanh()))
 
     def forward(self, inputs: torch.Tensor):
         inputs = self.conv0(inputs)
         inputs = inputs + self.conv1(self.residual(inputs))
-        inputs = self.subpixel_convolutional_blocks0(inputs)
-        inputs = self.shuffle0(inputs)
-        inputs = self.act(inputs)
-        inputs = self.subpixel_convolutional_blocks1(inputs)
-        inputs = self.shuffle1(inputs)
-        inputs = self.act(inputs)
-        inputs = self.conv3(inputs)
+        inputs = self.scaler(inputs)
+        inputs = self.conv2(inputs)
         return inputs
-
-    def fuse(self):
-        """fuse model Conv2d() + BatchNorm2d() layers, fuse Conv2d + im"""
-        prefix = "Fusing layers... "
-        p_bar = tqdm(self.modules(), desc=f'{prefix}', unit=" layer")
-        for m in p_bar:
-            p_bar.set_description_str(f"fusing {m.__class__.__name__}")
-            if isinstance(m, Conv):
-                if hasattr(m, "bn"):
-                    m.conv = fuse_conv_and_bn(m.conv, m.bn)
-                    m.forward = m.fuseforward
-                    delattr(m, 'bn')
-                    if hasattr(m, "drop"):
-                        delattr(m, "drop")
-        return self
 
 
 class SRGAN(nn.Module):
 
-    def __init__(self):
+    def __init__(self, resnet):
         super().__init__()
-        self.net = Model()
+        self.net = resnet
         self.tanh_to_norm = Convert_tanh_value_norm()
 
     def forward(self, inputs: torch.Tensor):
@@ -323,6 +316,37 @@ class SRGAN(nn.Module):
             inputs = self.tanh_to_norm(inputs)
         return inputs
 
+
+class Denoise(nn.Module):
+    def __init__(self, residual_blocks):
+        super().__init__()
+        act = nn.LeakyReLU(0.2)
+        self.conv0 = Conv(3, 32, 3, 1, None, act=nn.LeakyReLU(0.2))
+        self.conv1 = elan(32, 96, act=nn.LeakyReLU(0.2))
+        residual = [residual_block_2(96, 96, 128, 3, act=act) for _ in range(residual_blocks)]
+        self.res0 = nn.Sequential(*residual)
+        residual = [residual_block_1(96, 96, 24, 1, act=act) for _ in range(residual_blocks // 2)]
+        self.res1 = nn.Sequential(*residual)
+        self.conv2 = elan(96, 32, act)
+        self.conv3 = Conv(32, 3, 1, 1, None, act=False)
+        self.act0 = act
+        self.act = nn.Tanh()
+
+    def forward(self, inputs: torch.Tensor):
+        inputs = self.conv1(self.conv0(inputs))
+        inputs = self.res0(inputs) + inputs + self.res1(inputs)
+        inputs = self.conv3(self.conv2(inputs))
+        return self.act(inputs)
+
+
+class Model(nn.Module):
+    def __init__(self, model: callable):
+        super().__init__()
+        self.net = model
+
+    def forward(self, inputs: torch.Tensor):
+        return self.net(inputs)
+
     def fuse(self):
         """fuse model Conv2d() + BatchNorm2d() layers, fuse Conv2d + im"""
         prefix = "Fusing layers... "
@@ -339,20 +363,15 @@ class SRGAN(nn.Module):
         return self
 
 
-def intersect_dicts(da, db, exclude=()):
-    """Dictionary intersection of matching keys and shapes, omitting 'exclude' keys, using da values"""
-    return {k: v for k, v in da.items() if k in db and not any(x in k for x in exclude) and v.shape == db[k].shape}
-
-
 if __name__ == '__main__':
-    model = Model()
+    model = Model(ResNet(32))
     # model.eval().fuse()
     feed = torch.zeros([1, 3, 96, 96])
-    ckpt = torch.load("/home/thanh/Documents/github/image_super_resolution/best_fitness_31.pt", "cpu")
-    model.load_state_dict(ckpt['model'])
+    ckpt = torch.load("/home/thanh/Documents/github/image_super_resolution/checkpoint.pt", "cpu")
+    model.net.load_state_dict(ckpt['model'])
     for x in model.parameters():
         x.requires_grad = False
-    model.train().fuse()
+    model.eval().fuse()
 
     n_p = sum([x.numel() for x in model.parameters()])
     print(f"{n_p:,}")

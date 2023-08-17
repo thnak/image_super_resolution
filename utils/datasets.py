@@ -195,6 +195,31 @@ class SR_dataset(Dataset):
         return len(self.samples)
 
 
+class Noisy_dataset(Dataset):
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
+
+    def __init__(self, json_path, target_size, sigma=30., prefix=""):
+        json_path = json_path if isinstance(json_path, Path) else Path(json_path)
+        with open(json_path.as_posix(), "r") as fi:
+            self.samples = json.load(fi)
+        self.target_size = target_size
+        self.sigma = sigma
+        self.crop = Random_position(target_size=target_size)
+        self.transform = Normalize(self.mean, self.std)
+        self.transform2 = PIL_to_tanh()
+
+    def __getitem__(self, item):
+        image = read_image(self.samples[item], ImageReadMode.RGB)  # CHW
+        image = self.crop(image)
+        noisy = self.transform(image)
+        noisy = noisy + 2. / 255. * self.sigma * torch.randn(image.size())
+        return self.transform2(image), noisy
+
+    def __len__(self):
+        return len(self.samples)
+
+
 def init_dataloader(dataset, batch_size=16, shuffle=True, num_worker=2):
     train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_worker,
                               pin_memory=True)  # note that we're passing the collate function here
