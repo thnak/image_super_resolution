@@ -18,7 +18,7 @@ class Conv(nn.Module):
         assert 0 <= dropout <= 1, f"dropout rate must be 0 <= dropout <= 1, your {dropout}"
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
         self.bn = nn.BatchNorm2d(c2)
-        self.drop = nn.Dropout(p=dropout)
+        self.drop = nn.Dropout(p=dropout) if dropout > 0. else nn.Identity()
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, x):
@@ -241,7 +241,8 @@ class Discriminator(nn.Module):
         out_channels = 0
         for i in range(n_blocks):
             out_channels = (n_channels if i == 0 else in_channels * 2) if i % 2 == 0 else in_channels
-            conv_blocks.append(Conv(in_channels, out_channels, kernel_size, 1, None, act=nn.LeakyReLU()))
+            conv_blocks.append(Conv(in_channels, out_channels, kernel_size, 1 if i % 2 == 0 else 2, None,
+                                    act=nn.LeakyReLU(0.2)))
             in_channels = out_channels
         self.conv_blocks = nn.Sequential(*conv_blocks)
 
@@ -285,7 +286,7 @@ class ResNet(nn.Module):
     def __init__(self, num_block_resnet=16):
         super(ResNet, self).__init__()
 
-        self.conv0 = nn.Sequential(Conv(3, 64, 9, 1, act=False, dropout=0.01))
+        self.conv0 = nn.Sequential(Conv(3, 64, 9, 1, act=False))
         residual = [residual_block_1(64, 64,
                                      128, 3,
                                      act=nn.PReLU()) for x in range(num_block_resnet)]
@@ -364,11 +365,11 @@ class Model(nn.Module):
 
 
 if __name__ == '__main__':
-    model = Model(ResNet(32))
+    model = Model(SRGAN(ResNet(16)))
     # model.eval().fuse()
     feed = torch.zeros([1, 3, 96, 96])
     ckpt = torch.load("/home/thanh/Documents/github/image_super_resolution/checkpoint.pt", "cpu")
-    model.net.load_state_dict(ckpt['model'])
+    model.net.load_state_dict(ckpt['gen_net'])
     for x in model.parameters():
         x.requires_grad = False
     model.eval().fuse()

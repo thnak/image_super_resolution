@@ -88,6 +88,16 @@ def create_data_lists(train_folders, test_folders, min_size, output_folder="./")
     print("JSONS containing lists of Train and Test images have been saved to %s\n" % save_dir.as_posix())
 
 
+def convert_image_to_jpg(image_file: str | Path):
+    if isinstance(image_file, str):
+        image_file = Path(image_file)
+    image = Image.open(image_file.as_posix())
+    save_dir = image_file.with_suffix(".jpg")
+    image.save(save_dir)
+    return save_dir
+
+
+
 def intersect_dicts(da, db, exclude=()):
     """Dictionary intersection of matching keys and shapes, omitting 'exclude' keys, using da values"""
     return {k: v for k, v in da.items() if k in db and not any(x in k for x in exclude) and v.shape == db[k].shape}

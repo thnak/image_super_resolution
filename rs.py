@@ -3,7 +3,7 @@ import torch
 from torchvision.io import read_image, ImageReadMode, VideoReader, write_jpeg
 from torchvision.transforms.functional import resize, InterpolationMode
 from pathlib import Path
-from utils.general import VID_FORMATS
+from utils.general import VID_FORMATS, convert_image_to_jpg
 from utils.datasets import Normalize, RGB2BGR
 from utils.models import Tanh_to_PIL, Tanh_to_ImageArray
 from utils.ffmpeg import FFMPEG_recorder
@@ -31,7 +31,7 @@ def runer(**kwargs):
     step_size = kwargs['window_size']
     device = 'cuda' if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
-    model = torch.jit.load(model_dir)
+    model = torch.jit.load(model_dir, "cpu")
     model.to(device).eval()
     norm_ = Normalize().to(device)
     rgb2bgr = RGB2BGR().to(device)
@@ -71,6 +71,8 @@ def runer(**kwargs):
         video_writer.stopRecorder()
     else:
         tanh_2_pil = Tanh_to_ImageArray().to(device)
+        if src.suffix not in ['.jpg', ".png"]:
+            src = convert_image_to_jpg(src)
         image = read_image(src.as_posix(), ImageReadMode.RGB)
         c, h, w = image.size()
         print("input shape", image.size())
