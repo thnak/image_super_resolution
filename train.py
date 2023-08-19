@@ -111,32 +111,39 @@ if __name__ == '__main__':
     parser.add_argument("--worker", type=int, default=2)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--work_dir", type=str, default="./")
+    parser.add_argument("--momentum", type=float, default=0.999)
+    parser.add_argument("--weight_decay", type=float, default=0.00059)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--epochs", type=int, default=300)
 
     opt = parser.parse_args()
     json_file = Path("./train_images.json")
     work_dir = Path(opt.work_dir)
     res_checkpoints = Path("res_checkpoint.pt")
     gen_checkpoints = Path("gen_checkpoint.pt")
+    denoise_checkpoints = Path("denoise_checkpoint.pt")
     res_checkpoints = work_dir / res_checkpoints
     gen_checkpoints = work_dir / gen_checkpoints
-
+    denoise_checkpoints = work_dir / denoise_checkpoints
     device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
-    lr = 1e-4
-    epochs = 300
+    lr = opt.lr
+    epochs = opt.epochs
+    weight_decay = opt.weight_decay
+    momentum = opt.momentum
     start_epoch = 0
     workers = opt.worker
     batch_size = opt.batch_size
     scaler = GradScaler(enabled=device.type == 'cuda')
 
     if opt.train_denoise:
-        model = ResNet(16)
+        model = Denoise(8)
         model.to(device)
         for x in model.parameters():
             x.requires_grad = True
-        optimizer = torch.optim.SGD(model.parameters(), lr)
-        if res_checkpoints.is_file():
-            ckpt = torch.load(res_checkpoints.as_posix(), 'cpu')
+        optimizer = torch.optim.SGD(model.parameters(), lr, momentum=momentum, weight_decay=weight_decay)
+        if denoise_checkpoints.is_file():
+            ckpt = torch.load(denoise_checkpoints.as_posix(), 'cpu')
             checkpoint_state = intersect_dicts(ckpt['model'], model.state_dict())
             model.load_state_dict(checkpoint_state, strict=False)
             if len(checkpoint_state) == len(model.state_dict()):
@@ -156,7 +163,7 @@ if __name__ == '__main__':
             train(model, dataloader, compute_loss, optimizer, scaler, epoch)
             torch.save({'model': model.state_dict(),
                         "optimizer": optimizer.state_dict(),
-                        "epoch": epoch}, res_checkpoints.as_posix())
+                        "epoch": epoch}, denoise_checkpoints.as_posix())
 
     else:
         dataset = SR_dataset(json_file, 96, 4, "Train: ")
@@ -167,7 +174,7 @@ if __name__ == '__main__':
         if opt.resnet:
             model = ResNet(16)
             compute_loss = nn.MSELoss()
-            optimizer = torch.optim.SGD(params=model.parameters(), lr=lr, momentum=0.999, weight_decay=0.00059)
+            optimizer = torch.optim.SGD(params=model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
             start_epoch = 0
             model.to(device)
             n_P = sum([x.numel() for x in model.parameters()])
@@ -197,8 +204,10 @@ if __name__ == '__main__':
                 x.requires_grad = True
             for x in dis_net.parameters():
                 x.requires_grad = True
-            optimizer_g = torch.optim.SGD(params=gen_net.parameters(), lr=lr, momentum=0.999, weight_decay=0.00059)
-            optimizer_d = torch.optim.SGD(params=dis_net.parameters(), lr=lr, momentum=0.999, weight_decay=0.00059)
+            optimizer_g = torch.optim.SGD(params=gen_net.parameters(), lr=lr,
+                                          momentum=momentum, weight_decay=weight_decay)
+            optimizer_d = torch.optim.SGD(params=dis_net.parameters(), lr=lr,
+                                          momentum=momentum, weight_decay=weight_decay)
 
             start_epoch = 0
             if gen_checkpoints.is_file():

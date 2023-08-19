@@ -24,6 +24,15 @@ def sliding_window(image: torch.Tensor, step: int | list[int, int] | tuple[int, 
             yield step, x, y, image[..., y:y + windowSize, x:x + windowSize]
 
 
+def total_inter_sliding_window(image: torch.Tensor, step: int):
+    n_dims = image.dim()
+    if n_dims == 3:
+        _, h, w = image.size()
+        return len([_ for _ in range(0, h, step)]) * len([_ for _ in range(0, w, step)])
+    else:
+        return 0
+
+
 def runer(**kwargs):
     model_dir = Path(kwargs["model"])
     src = Path(kwargs['src'])
@@ -69,6 +78,7 @@ def runer(**kwargs):
                 pbar.desc = f"{frame.shape} {frame.dtype}"
                 video_writer.writeFrame(frame)
         video_writer.stopRecorder()
+        video_writer.addAudio(src.as_posix())
     else:
         tanh_2_pil = Tanh_to_ImageArray().to(device)
         if src.suffix not in ['.jpg', ".png"]:
@@ -81,7 +91,8 @@ def runer(**kwargs):
         result_image = None
         image_width = 0
         high, width = 0, 0
-        for step_size, _, _, window_img in sliding_window(image, step_size):
+        pbar = tqdm(sliding_window(image, step_size), total=total_inter_sliding_window(image, step_size))
+        for step_size, _, _, window_img in pbar:
             window_img = norm_(window_img).unsqueeze(0).to(device)
             if half:
                 window_img = window_img.half()
@@ -104,7 +115,7 @@ def runer(**kwargs):
                     width = 0
 
         write_jpeg(result_image, 'result.jpg')
-        print("output shape",result_image.shape)
+        print("output shape", result_image.shape)
 
 
 if __name__ == "__main__":

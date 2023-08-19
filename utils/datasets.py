@@ -116,7 +116,22 @@ class Decode_tensor_from_predict(Module):
         return inputs.round().numpy()
 
 
-class ColorJiter(Module):
+class RandomNoisyImage(Module):
+    def __init__(self, max_pixel_value=255.):
+        super().__init__()
+        from skimage.util import random_noise
+        self.random_noise = random_noise
+        self.max_pixel_value = max_pixel_value
+
+    def forward(self, inputs):
+        val = random.random()
+        if val > 0.:
+            val = val / 100
+        noisy = self.random_noise(inputs.numpy(), var=val) * self.max_pixel_value
+        return torch.from_numpy(noisy)
+
+
+class ColorJitter(Module):
     def __init__(self,
                  brightness=0.2,
                  contrast=0.2, saturation=0.2, hue=0.2,
@@ -199,22 +214,19 @@ class Noisy_dataset(Dataset):
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
 
-    def __init__(self, json_path, target_size, sigma=30., prefix=""):
+    def __init__(self, json_path, target_size, prefix=""):
         json_path = json_path if isinstance(json_path, Path) else Path(json_path)
         with open(json_path.as_posix(), "r") as fi:
             self.samples = json.load(fi)
         self.target_size = target_size
-        self.sigma = sigma
         self.crop = Random_position(target_size=target_size)
-        self.transform = Normalize(self.mean, self.std)
-        self.transform2 = PIL_to_tanh()
+        self.transform_lr = Normalize(self.mean, self.std)
+        self.transform_hr = Compose([RandomNoisyImage(), PIL_to_tanh()])
 
     def __getitem__(self, item):
         image = read_image(self.samples[item], ImageReadMode.RGB)  # CHW
         image = self.crop(image)
-        noisy = self.transform(image)
-        noisy = noisy + 2. / 255. * self.sigma * torch.randn(image.size())
-        return self.transform2(image), noisy
+        return self.transform_hr(image), self.transform_lr(image)
 
     def __len__(self):
         return len(self.samples)

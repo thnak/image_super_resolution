@@ -321,23 +321,25 @@ class SRGAN(nn.Module):
 class Denoise(nn.Module):
     def __init__(self, residual_blocks):
         super().__init__()
-        act = nn.LeakyReLU(0.2)
-        self.conv0 = Conv(3, 32, 3, 1, None, act=nn.LeakyReLU(0.2))
-        self.conv1 = elan(32, 96, act=nn.LeakyReLU(0.2))
-        residual = [residual_block_2(96, 96, 128, 3, act=act) for _ in range(residual_blocks)]
-        self.res0 = nn.Sequential(*residual)
-        residual = [residual_block_1(96, 96, 24, 1, act=act) for _ in range(residual_blocks // 2)]
-        self.res1 = nn.Sequential(*residual)
-        self.conv2 = elan(96, 32, act)
-        self.conv3 = Conv(32, 3, 1, 1, None, act=False)
-        self.act0 = act
-        self.act = nn.Tanh()
+        act = nn.PReLU()
+        kernel_list = [3, 5, 7, 9, 11]
+        self.conv0 = Conv(3, 64, 9, 1, act=False)
+        self.conv0_ = nn.ModuleList([Conv(64, 64, k, 1, act=act) for k in kernel_list])
+        residual = [residual_block_1(64, 64, 96 if i % 2 == 0 else 32, 3, act=act) for i in range(residual_blocks)]
+        self.residual = nn.Sequential(*residual)
+        self.conv_lead = Conv(64, 64, 3, act=False)
+        kernel_list.reverse()
+        self.conv1_ = nn.ModuleList([Conv(64, 64, k, 1, act=act) for k in kernel_list])
+        self.conv1 = Conv(64, 3, 9, 1, act=nn.Tanh())
 
     def forward(self, inputs: torch.Tensor):
-        inputs = self.conv1(self.conv0(inputs))
-        inputs = self.res0(inputs) + inputs + self.res1(inputs)
-        inputs = self.conv3(self.conv2(inputs))
-        return self.act(inputs)
+        inputs = outputs = self.conv0(inputs)
+        for m in self.conv0_:
+            outputs = outputs + m(outputs)
+        outputs = self.conv_lead(self.residual(outputs)) + outputs
+        for m in self.conv1_:
+            outputs = outputs + m(outputs)
+        return self.conv1(outputs + inputs)
 
 
 class Model(nn.Module):
@@ -365,11 +367,11 @@ class Model(nn.Module):
 
 
 if __name__ == '__main__':
-    model = Model(SRGAN(ResNet(16)))
+    model = Model(Denoise(8))
     # model.eval().fuse()
     feed = torch.zeros([1, 3, 96, 96])
-    ckpt = torch.load("/home/thanh/Documents/github/image_super_resolution/checkpoint.pt", "cpu")
-    model.net.load_state_dict(ckpt['gen_net'])
+    ckpt = torch.load("/home/thanh/Documents/github/image_super_resolution/denoise_checkpoint.pt", "cpu")
+    model.net.load_state_dict(ckpt['model'])
     for x in model.parameters():
         x.requires_grad = False
     model.eval().fuse()

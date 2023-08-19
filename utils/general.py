@@ -81,7 +81,7 @@ def create_data_lists(train_folders, test_folders, min_size, output_folder="./")
 
     print("There are %d images in the validating data.\n" % len(train_images))
     save_dir = Path(output_folder)
-    save_dir = save_dir / 'train_images.json'
+    save_dir = save_dir / 'val_images.json'
     with open(save_dir.as_posix(), 'w') as j:
         json.dump(train_images, j)
 

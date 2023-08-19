@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import torch
 import subprocess
 import shlex
@@ -9,6 +11,7 @@ try:
     from pyadl import *
 except Exception as ex:
     pass
+
 
 def getGPUtype():
     try:
@@ -115,10 +118,20 @@ class FFMPEG_recorder:
                 f"ffmpeg -hide_banner -i {self.save_path} -i {sub_file} -c:v copy -c:s mov_text -metadata:s:s:0 language=eng {save}")
         return process
 
-    def addAudio(self):
+    def addAudio(self, audio_src):
         """on working
         """
-        pass
+
+        if isinstance(audio_src, str):
+            audio_src = Path(audio_src)
+        if audio_src.is_file():
+            save_dir = self.save_path.replace(".mp4", "_audio.mp4")
+            cmd = ["ffmpeg", "-i", f"{self.save_path}", "-i", f"{audio_src.as_posix()}", "-c:v", "copy", "-map", "0:v",
+               "-map", "1:a", "-y", f"{save_dir}"]
+            subprocess.run(cmd)
+            return 1
+        else:
+            return 0
 
     def stopRecorder(self):
         """Stop record video"""
