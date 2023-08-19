@@ -322,24 +322,24 @@ class Denoise(nn.Module):
     def __init__(self, residual_blocks):
         super().__init__()
         act = nn.PReLU()
-        kernel_list = [3, 5, 7, 9, 11]
-        self.conv0 = Conv(3, 64, 9, 1, act=False)
+        kernel_list = [1, 3, 1]
+        self.conv0 = Conv(3, 64, 3, 1, act=False)
         self.conv0_ = nn.ModuleList([Conv(64, 64, k, 1, act=act) for k in kernel_list])
-        residual = [residual_block_1(64, 64, 96 if i % 2 == 0 else 32, 3, act=act) for i in range(residual_blocks)]
+        residual = [residual_block_1(64, 64, 128 if i % 2 == 0 else 32, 3, act=act) for i in range(residual_blocks)]
         self.residual = nn.Sequential(*residual)
         self.conv_lead = Conv(64, 64, 3, act=False)
         kernel_list.reverse()
         self.conv1_ = nn.ModuleList([Conv(64, 64, k, 1, act=act) for k in kernel_list])
-        self.conv1 = Conv(64, 3, 9, 1, act=nn.Tanh())
+        self.conv1 = Conv(64, 3, 3, 1, act=nn.Tanh())
 
     def forward(self, inputs: torch.Tensor):
-        inputs = outputs = self.conv0(inputs)
+        inputs2 = outputs = self.conv0(inputs)
         for m in self.conv0_:
             outputs = outputs + m(outputs)
         outputs = self.conv_lead(self.residual(outputs)) + outputs
         for m in self.conv1_:
             outputs = outputs + m(outputs)
-        return self.conv1(outputs + inputs)
+        return self.conv1(outputs + inputs2)
 
 
 class Model(nn.Module):
@@ -367,7 +367,7 @@ class Model(nn.Module):
 
 
 if __name__ == '__main__':
-    model = Model(Denoise(8))
+    model = Model(Denoise(16))
     # model.eval().fuse()
     feed = torch.zeros([1, 3, 96, 96])
     ckpt = torch.load("/home/thanh/Documents/github/image_super_resolution/denoise_checkpoint.pt", "cpu")

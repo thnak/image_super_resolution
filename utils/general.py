@@ -92,10 +92,12 @@ def convert_image_to_jpg(image_file: str | Path):
     if isinstance(image_file, str):
         image_file = Path(image_file)
     image = Image.open(image_file.as_posix())
+    if image_file.suffix == '.png':
+        image = image.convert("RGB")
     save_dir = image_file.with_suffix(".jpg")
     image.save(save_dir)
+    image_file.unlink()
     return save_dir
-
 
 
 def intersect_dicts(da, db, exclude=()):

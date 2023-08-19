@@ -136,6 +136,9 @@ if __name__ == '__main__':
     batch_size = opt.batch_size
     scaler = GradScaler(enabled=device.type == 'cuda')
 
+    data_mean = None
+    data_std = None
+
     if opt.train_denoise:
         model = Denoise(8)
         model.to(device)
@@ -150,10 +153,14 @@ if __name__ == '__main__':
                 optimizer.load_state_dict(ckpt['optimizer'])
                 start_epoch = ckpt['epoch'] + 1
             optimizer_to(optimizer, device)
+            data_std = ckpt['std']
+            data_mean = ckpt['mean']
             print(f"Loaded pre-trained {len(checkpoint_state)}/{len(model.state_dict())} model")
             del ckpt
 
-        dataset = Noisy_dataset(json_path=json_file.as_posix(), target_size=96, prefix="Train: ")
+        dataset = Noisy_dataset(json_path=json_file.as_posix(), target_size=96,
+                                mean=data_mean, std=data_std,
+                                prefix="Train: ")
         dataloader = init_dataloader(dataset, batch_size=batch_size, num_worker=workers, shuffle=True)[0]
         compute_loss = nn.MSELoss()
         n_p = sum([x.numel() for x in model.parameters()])
@@ -163,7 +170,9 @@ if __name__ == '__main__':
             train(model, dataloader, compute_loss, optimizer, scaler, epoch)
             torch.save({'model': model.state_dict(),
                         "optimizer": optimizer.state_dict(),
-                        "epoch": epoch}, denoise_checkpoints.as_posix())
+                        "epoch": epoch,
+                        "mean": dataset.mean,
+                        "std": dataset.std}, denoise_checkpoints.as_posix())
 
     else:
         dataset = SR_dataset(json_file, 96, 4, "Train: ")

@@ -1,5 +1,6 @@
 import random
 
+import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.nn import Module
@@ -8,7 +9,10 @@ import torchvision.transforms.functional as T
 from torchvision.io import read_image, ImageReadMode
 import json
 from pathlib import Path
-from utils.general import ground_up
+
+from tqdm import tqdm
+
+from utils.general import ground_up, convert_image_to_jpg
 
 
 class Random_low_rs(Module):
@@ -126,8 +130,9 @@ class RandomNoisyImage(Module):
     def forward(self, inputs):
         val = random.random()
         if val > 0.:
-            val = val / 100
+            val = val / 1000
         noisy = self.random_noise(inputs.numpy(), var=val) * self.max_pixel_value
+        noisy = np.clip(noisy,0., 255).astype(np.uint8)
         return torch.from_numpy(noisy)
 
 
@@ -214,14 +219,23 @@ class Noisy_dataset(Dataset):
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
 
-    def __init__(self, json_path, target_size, prefix=""):
+    def __init__(self, json_path, target_size, mean=None, std=None, prefix=""):
+        if mean is not None:
+            self.mean = mean
+        if std is not None:
+            self.std = std
+        self.prefix = prefix
         json_path = json_path if isinstance(json_path, Path) else Path(json_path)
         with open(json_path.as_posix(), "r") as fi:
             self.samples = json.load(fi)
+
+        if self.calculateMeanSTD() > 0:
+            with open(json_path.as_posix(), 'w') as fo:
+                fo.write(json.dumps(self.samples))
         self.target_size = target_size
         self.crop = Random_position(target_size=target_size)
-        self.transform_lr = Normalize(self.mean, self.std)
-        self.transform_hr = Compose([RandomNoisyImage(), PIL_to_tanh()])
+        self.transform_lr = Compose([RandomNoisyImage(), Normalize(self.mean, self.std)])
+        self.transform_hr = PIL_to_tanh()
 
     def __getitem__(self, item):
         image = read_image(self.samples[item], ImageReadMode.RGB)  # CHW
@@ -230,6 +244,36 @@ class Noisy_dataset(Dataset):
 
     def __len__(self):
         return len(self.samples)
+
+    def calculateMeanSTD(self):
+        psum = torch.tensor([0.0, 0.0, 0.0])
+        psum_sq = torch.tensor([0.0, 0.0, 0.0])
+        pbar = tqdm(self.samples, total=len(self.samples))
+        count = 0
+        detect_err = 0
+        for i, di in enumerate(pbar):
+            try:
+                img = read_image(di, ImageReadMode.RGB).float()
+            except:
+                di = convert_image_to_jpg(di).as_posix()
+                img = read_image(di, ImageReadMode.RGB).float()
+                self.samples[i] = di
+                detect_err += 1
+            img /= 255.
+            count += img.size(1) * img.size(2)
+            img = torch.unsqueeze(img, dim=0)
+            psum += img.sum(dim=[0, 2, 3])
+            psum_sq += (img ** 2).sum(dim=[0, 2, 3])
+
+            pbar.set_description(f"{self.prefix}Collecting data to calculate mean, std...")
+            if i == len(self.samples) - 1:
+                total_mean = psum / count
+                total_var = (psum_sq / count) - total_mean ** 2
+                total_std = torch.sqrt(total_var)
+                self.mean = total_mean.cpu().numpy().tolist()
+                self.std = total_std.cpu().numpy().tolist()
+                pbar.set_description(f"{self.prefix}Using mean: {self.mean}, std: {self.std} for this dataset.")
+        return detect_err
 
 
 def init_dataloader(dataset, batch_size=16, shuffle=True, num_worker=2):
