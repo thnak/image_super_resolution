@@ -365,6 +365,8 @@ class Model(nn.Module):
 
 
 if __name__ == '__main__':
+    if torch.cuda.is_available():
+        torch.jit.enable_onednn_fusion(True)
     model = Model(Denoise(16))
     # model.eval().fuse()
     feed = torch.zeros([1, 3, 96, 96])

@@ -1,10 +1,11 @@
 import argparse
 import torch
+from torch import autocast
 from torchvision.io import read_image, ImageReadMode, VideoReader, write_png
 from torchvision.transforms.functional import resize, InterpolationMode
 from pathlib import Path
 from utils.general import VID_FORMATS, convert_image_to_jpg
-from utils.datasets import Normalize, RGB2BGR
+from utils.datasets import Normalize, RGB2BGR, init_dataloader_for_inference
 from utils.models import Tanh_to_PIL, Tanh_to_ImageArray
 from utils.ffmpeg import FFMPEG_recorder
 from tqdm import tqdm
@@ -38,6 +39,8 @@ def runer(**kwargs):
     src = Path(kwargs['src'])
     result_dir = Path(kwargs['save_dir'])
     step_size = kwargs['window_size']
+    batch_size = kwargs['batch_size']
+    worker = kwargs['worker']
     device = 'cuda' if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
     model = torch.jit.load(model_dir, "cpu")
@@ -45,33 +48,22 @@ def runer(**kwargs):
     norm_ = Normalize().to(device)
     rgb2bgr = RGB2BGR().to(device)
 
-    half = device.type == "cuda"
-    if half:
-        model.half()
     if src.suffix in VID_FORMATS:
+        tanh_2_pil = Tanh_to_ImageArray().to(device)
         video_writer = None
         result_dir = result_dir.with_suffix('.mp4')
-        video = VideoReader(src.as_posix(), "video")
-        video.set_current_stream("video")
-        metadata = video.get_metadata()
-        fps = metadata['video']['fps']
-        tanh_2_pil = Tanh_to_ImageArray().to(device)
-
-        fps = fps[0] if isinstance(fps, list) else fps
-        total_frame = fps * metadata['video']['duration'][0]
-        pbar = tqdm(video, total=int(total_frame))
-        for idx, data_dict in enumerate(pbar):
-            frame = data_dict['data'].to(device)
-
-            frame = norm_(frame)
-            frame = frame.unsqueeze(0)
-            if half:
-                frame = frame.half()
-            sr = tanh_2_pil(model(frame))
+        dataloader, dataset = init_dataloader_for_inference(src, worker, batch_size=batch_size)
+        pbar = tqdm(dataloader, total=len(dataloader))
+        for idx, frames in enumerate(pbar):
+            frames = frames.to(device)
+            with autocast(device_type=device.type, enabled=device.type == 'cuda'):
+                frames = norm_(frames)
+                sr = model(frames)
+            sr = tanh_2_pil(sr)
             sr = rgb2bgr(sr)
             if video_writer is None:
                 video_writer = FFMPEG_recorder(save_path=result_dir.as_posix(),
-                                               videoDimensions=(sr.size(-1), sr.size(-2)), fps=fps)
+                                               videoDimensions=(sr.size(-1), sr.size(-2)), fps=dataset.fps)
             for frame in sr:
                 frame = frame.cpu()
                 frame = frame.permute([1, 2, 0]).numpy()
@@ -94,9 +86,9 @@ def runer(**kwargs):
         pbar = tqdm(sliding_window(image, step_size), total=total_inter_sliding_window(image, step_size))
         for step_size, _, _, window_img in pbar:
             window_img = norm_(window_img).unsqueeze(0).to(device)
-            if half:
-                window_img = window_img.half()
-            window_img = tanh_2_pil(model(window_img))
+            with autocast(device_type=device.type, enabled=device.type == 'cuda'):
+                window_img = model(window_img)
+            window_img = tanh_2_pil(window_img)
             r_b, r_c, r_h, r_w = window_img.size()
             if result_image is None:
                 if step_size[0] == r_h:
@@ -114,7 +106,7 @@ def runer(**kwargs):
                     high += h
                     width = 0
 
-        write_png(result_image, 'result.png')
+        write_png(result_image, result_dir.with_suffix(".png").as_posix())
         print("output shape", result_image.shape)
 
 
@@ -124,5 +116,11 @@ if __name__ == "__main__":
     parser.add_argument("--src", type=str, default="")
     parser.add_argument("--save_dir", type=str, default="result.jpg")
     parser.add_argument("--window_size", type=int, default=96)
+    parser.add_argument("--batch_size", type=int, default=1)
+    parser.add_argument("--worker", type=int, default=4)
     opt = parser.parse_args()
-    runer(model=opt.model, src=opt.src, save_dir=opt.save_dir, window_size=opt.window_size)
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+    runer(**opt.__dict__)

@@ -6,7 +6,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch.nn import Module
 from torchvision.transforms import InterpolationMode, Lambda, Compose
 import torchvision.transforms.functional as T
-from torchvision.io import read_image, ImageReadMode
+from torchvision.io import read_image, VideoReader, ImageReadMode
 import json
 from pathlib import Path
 
@@ -281,3 +281,37 @@ def init_dataloader(dataset, batch_size=16, shuffle=True, num_worker=2):
     train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_worker,
                               pin_memory=True)  # note that we're passing the collate function here
     return train_loader, dataset
+
+
+class dataset_for_inference(Dataset):
+    def __init__(self, src):
+        if isinstance(src, str):
+            src = Path(src)
+        video_reader = VideoReader(src.as_posix(), "video")
+        video_reader.set_current_stream("video")
+        meta_data = video_reader.get_metadata()
+        fps = meta_data['video']['fps']
+
+        fps = fps[0] if isinstance(fps, list) else fps
+        total_frame = fps * meta_data['video']['duration'][0]
+        self.total_frame = int(total_frame)
+        self.fps = fps
+        self.video_reader = video_reader
+        frame = next(video_reader)['data']
+        self.shape = frame.shape  # CHW
+        video_reader.seek(0, keyframes_only=True)
+
+    def __len__(self):
+        return self.total_frame
+
+    def __getitem__(self, item):
+        frame = next(self.video_reader)['data']
+        return frame
+
+
+def init_dataloader_for_inference(src, worker, batch_size):
+    if isinstance(src, str):
+        src = Path(src)
+    dataset = dataset_for_inference(src)
+    dataloader = DataLoader(dataset, batch_size, shuffle=False, num_workers=worker)
+    return dataloader, dataset
