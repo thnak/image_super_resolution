@@ -4,6 +4,7 @@ from torch import nn
 from tqdm import tqdm
 
 from utils.general import fix_problem_with_reuse_activation_funtion, ACT_LIST, autopad, intersect_dicts
+from utils.datasets import Normalize
 
 
 class Conv(nn.Module):
@@ -330,7 +331,9 @@ class Denoise(nn.Module):
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
         self.scaler = nn.Sequential(
             *[nn.Sequential(Scaler(64, 64, 2, 3, nn.PReLU())) for x in range(2)])
-        self.conv2 = nn.Sequential(Conv(64, 3, 9, 1, act=nn.Tanh()), nn.AvgPool2d(2, 4, 0))
+        self.conv2 = nn.Sequential(Conv(64, 32, 9, 1, act=nn.PReLU()),
+                                   Conv(32, 3, 1, 1, None, act=nn.Tanh()),
+                                   nn.AvgPool2d(2, 4, 0))
 
     def forward(self, inputs: torch.Tensor):
         inputs = self.conv0(inputs)
@@ -341,9 +344,15 @@ class Denoise(nn.Module):
 
 
 class Model(nn.Module):
+    mean = None
+    std = None
+
     def __init__(self, model: callable):
         super().__init__()
         self.net = model
+
+    def init_normalize(self, mean, std):
+        self.net = nn.Sequential(Normalize(mean, std, dim=4), self.net)
 
     def forward(self, inputs: torch.Tensor):
         return self.net(inputs)
@@ -367,13 +376,15 @@ class Model(nn.Module):
 if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.jit.enable_onednn_fusion(True)
-    model = Model(Denoise(16))
+    model = Model(Denoise(8))
     # model.eval().fuse()
     feed = torch.zeros([1, 3, 96, 96])
     # ckpt = torch.load("/home/thanh/Documents/github/image_super_resolution/denoise_checkpoint.pt", "cpu")
-    # model.net.load_state_dict(intersect_dicts(ckpt['model'], model.state_dict()))
+    # model.net.load_state_dict(ckpt['model'])
+    # model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False
+        x.grad = None
     model.eval().fuse()
 
     n_p = sum([x.numel() for x in model.parameters()])

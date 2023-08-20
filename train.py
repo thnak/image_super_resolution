@@ -203,7 +203,8 @@ if __name__ == '__main__':
 
             for epoch in range(start_epoch, 300):
                 train(model, dataloader, compute_loss, optimizer, scaler, epoch)
-                torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(), "epoch": epoch},
+                torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(),
+                            "epoch": epoch, "mean": dataset.mean, "std": dataset.std},
                            res_checkpoints.as_posix())
 
         else:
@@ -251,5 +252,6 @@ if __name__ == '__main__':
                             "dis_net": dis_net.state_dict(),
                             "optimizer_g": optimizer_g.state_dict(),
                             "optimizer_d": optimizer_d.state_dict(),
+                            "mean": dataset.mean, "std": dataset.std,
                             "epoch": x},
                            gen_checkpoints.as_posix())

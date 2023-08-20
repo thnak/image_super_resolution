@@ -72,6 +72,7 @@ def runer(**kwargs):
                 video_writer.writeFrame(frame)
         video_writer.stopRecorder()
         video_writer.addAudio(src.as_posix())
+
     else:
         tanh_2_pil = Tanh_to_ImageArray().to(device)
         if src.suffix not in ['.jpg', ".png"]:
@@ -124,6 +125,6 @@ if __name__ == "__main__":
         torch.backends.cudnn.benchmark = True
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-        torch.jit.enable_onednn_fusion(True)
+        # torch.jit.enable_onednn_fusion(True)
 
     runer(**opt.__dict__)

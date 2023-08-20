@@ -70,7 +70,7 @@ def create_data_lists(train_folders, test_folders, min_size, output_folder="./")
     with open(save_dir.as_posix(), 'w') as j:
         json.dump(train_images, j)
     train_images = []
-    for d in train_folders:
+    for d in test_folders:
         for i in Path(d).iterdir():
             if i.suffix in IMG_FORMATS:
                 image = Image.open(i.as_posix())
