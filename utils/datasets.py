@@ -132,7 +132,7 @@ class RandomNoisyImage(Module):
         if val > 0.:
             val = val / 1000
         noisy = self.random_noise(inputs.numpy(), var=val) * self.max_pixel_value
-        noisy = np.clip(noisy,0., 255).astype(np.uint8)
+        noisy = np.clip(noisy, 0., 255).astype(np.uint8)
         return torch.from_numpy(noisy)
 
 
@@ -229,9 +229,10 @@ class Noisy_dataset(Dataset):
         with open(json_path.as_posix(), "r") as fi:
             self.samples = json.load(fi)
 
-        if self.calculateMeanSTD() > 0:
-            with open(json_path.as_posix(), 'w') as fo:
-                fo.write(json.dumps(self.samples))
+        if sum(self.mean) == 0 and sum(self.std) == 3:
+            if self.calculateMeanSTD() > 0:
+                with open(json_path.as_posix(), 'w') as fo:
+                    fo.write(json.dumps(self.samples))
         self.target_size = target_size
         self.crop = Random_position(target_size=target_size)
         self.transform_lr = Compose([RandomNoisyImage(), Normalize(self.mean, self.std)])

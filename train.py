@@ -153,8 +153,8 @@ if __name__ == '__main__':
                 optimizer.load_state_dict(ckpt['optimizer'])
                 start_epoch = ckpt['epoch'] + 1
             optimizer_to(optimizer, device)
-            data_std = ckpt['std']
-            data_mean = ckpt['mean']
+            data_std = ckpt.get('std', None)
+            data_mean = ckpt.get('mean', None)
             print(f"Loaded pre-trained {len(checkpoint_state)}/{len(model.state_dict())} model")
             del ckpt
 
