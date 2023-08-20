@@ -45,6 +45,7 @@ def runer(**kwargs):
     device = torch.device(device)
     model = torch.jit.load(model_dir, "cpu")
     model.to(device).eval()
+    model = torch.jit.optimize_for_inference(model)
     norm_ = Normalize().to(device)
     rgb2bgr = RGB2BGR().to(device)
 
@@ -123,4 +124,6 @@ if __name__ == "__main__":
         torch.backends.cudnn.benchmark = True
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
+        torch.jit.enable_onednn_fusion(True)
+
     runer(**opt.__dict__)
