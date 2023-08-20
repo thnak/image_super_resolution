@@ -3,7 +3,7 @@ import torchvision
 from torch import nn
 from tqdm import tqdm
 
-from utils.general import fix_problem_with_reuse_activation_funtion, ACT_LIST, autopad
+from utils.general import fix_problem_with_reuse_activation_funtion, ACT_LIST, autopad, intersect_dicts
 
 
 class Conv(nn.Module):
@@ -327,11 +327,10 @@ class Denoise(nn.Module):
                                      128, 3,
                                      act=nn.PReLU()) for x in range(residual_blocks)]
         self.residual = nn.Sequential(*residual)
-
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
         self.scaler = nn.Sequential(
             *[nn.Sequential(Scaler(64, 64, 2, 3, nn.PReLU())) for x in range(2)])
-        self.conv2 = nn.Sequential(nn.MaxPool2d(2, 4, 0),Conv(64, 3, 9, 1, act=nn.Tanh()))
+        self.conv2 = nn.Sequential(Conv(64, 3, 9, 1, act=nn.Tanh()), nn.AvgPool2d(2, 4, 0))
 
     def forward(self, inputs: torch.Tensor):
         inputs = self.conv0(inputs)
@@ -370,7 +369,7 @@ if __name__ == '__main__':
     # model.eval().fuse()
     feed = torch.zeros([1, 3, 96, 96])
     # ckpt = torch.load("/home/thanh/Documents/github/image_super_resolution/denoise_checkpoint.pt", "cpu")
-    # model.net.load_state_dict(ckpt['model'])
+    # model.net.load_state_dict(intersect_dicts(ckpt['model'], model.state_dict()))
     for x in model.parameters():
         x.requires_grad = False
     model.eval().fuse()

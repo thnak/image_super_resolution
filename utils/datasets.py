@@ -130,7 +130,7 @@ class RandomNoisyImage(Module):
     def forward(self, inputs):
         val = random.random()
         if val > 0.:
-            val = val / 1000
+            val = val / 250
         noisy = self.random_noise(inputs.numpy(), var=val) * self.max_pixel_value
         noisy = np.clip(noisy, 0., 255).astype(np.uint8)
         return torch.from_numpy(noisy)

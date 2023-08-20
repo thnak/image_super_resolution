@@ -1,6 +1,6 @@
 import argparse
 import torch
-from torchvision.io import read_image, ImageReadMode, VideoReader, write_jpeg
+from torchvision.io import read_image, ImageReadMode, VideoReader, write_png
 from torchvision.transforms.functional import resize, InterpolationMode
 from pathlib import Path
 from utils.general import VID_FORMATS, convert_image_to_jpg
@@ -114,7 +114,7 @@ def runer(**kwargs):
                     high += h
                     width = 0
 
-        write_jpeg(result_image, 'result.jpg')
+        write_png(result_image, 'result.png')
         print("output shape", result_image.shape)
 
 
