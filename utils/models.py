@@ -34,10 +34,10 @@ class residual_block_1(nn.Module):
         super(residual_block_1, self).__init__()
         act = fix_problem_with_reuse_activation_funtion(act)
         self.m = nn.Sequential(
-            Conv(in_channel, hidden_channel, 1, 1, None, act=act),
+            Conv(in_channel, hidden_channel, 3, 1, None, act=act),
             Conv(hidden_channel, hidden_channel, kernel, 1, None, act=act),
-            Conv(hidden_channel, out_channel, 1, 1, None, act=False))
-        self.act = nn.Identity()
+            Conv(hidden_channel, out_channel, 3, 1, None, act=False))
+        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, inputs: torch.Tensor):
         return self.act(inputs + self.m(inputs))
@@ -289,7 +289,7 @@ class ResNet(nn.Module):
 
         self.conv0 = nn.Sequential(Conv(3, 64, 9, 1, act=False))
         residual = [residual_block_1(64, 64,
-                                     128, 3,
+                                     128, 5,
                                      act=nn.PReLU()) for x in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 

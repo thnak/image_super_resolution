@@ -4,9 +4,9 @@ from utils.models import Convert_tanh_value_norm, TruncatedVGG19
 
 
 class Content_Loss:
-    def __init__(self, mean=None, std=None, vgg_i=5, vgg_j=4, beta=1e-3, device='cuda'):
-        self.tanh_to_norm = Convert_tanh_value_norm()
+    def __init__(self, vgg_i=5, vgg_j=4, beta=1e-3, device='cuda'):
         self.vgg_net = TruncatedVGG19(vgg_i, vgg_j).eval().to(device)
+
         self.content_loss_compute = nn.MSELoss()
         self.adversarial_loss_compute = nn.BCEWithLogitsLoss()
         self.beta = beta

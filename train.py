@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import torch
 import numpy as np
@@ -8,7 +10,7 @@ from torch.nn import MSELoss
 from torch import autocast, nn
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import Adam, SGD
-from torch.optim.lr_scheduler import LambdaLR
+from torch.optim.lr_scheduler import LambdaLR, LinearLR
 from tqdm import tqdm
 from utils.models import ResNet, SRGAN, Discriminator, Model, Denoise
 from utils.general import intersect_dicts
@@ -184,6 +186,10 @@ if __name__ == '__main__':
             model = ResNet(16)
             compute_loss = nn.MSELoss()
             optimizer = torch.optim.SGD(params=model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
+            schedule = LinearLR(optimizer, start_factor=1, end_factor=0.1,
+                                total_iters=int((epochs / 2) // len(dataloader) + 1))
+            epochs = int(epochs // len(dataloader) + 1)
+
             start_epoch = 0
             model.to(device)
             n_P = sum([x.numel() for x in model.parameters()])
@@ -201,8 +207,9 @@ if __name__ == '__main__':
                 print(f"Loaded pre-trained {len(checkpoint_state)}/{len(model.state_dict())} model")
                 del ckpt
 
-            for epoch in range(start_epoch, 300):
+            for epoch in range(start_epoch, epochs):
                 train(model, dataloader, compute_loss, optimizer, scaler, epoch)
+                schedule.step()
                 torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(),
                             "epoch": epoch, "mean": dataset.mean, "std": dataset.std},
                            res_checkpoints.as_posix())
@@ -218,7 +225,12 @@ if __name__ == '__main__':
                                           momentum=momentum, weight_decay=weight_decay)
             optimizer_d = torch.optim.SGD(params=dis_net.parameters(), lr=lr,
                                           momentum=momentum, weight_decay=weight_decay)
+            schedule_g = LinearLR(optimizer_g, start_factor=1, end_factor=0.1,
+                                  total_iters=int((epochs / 2) // len(dataloader) + 1))
+            schedule_d = LinearLR(optimizer_d, start_factor=1, end_factor=0.1,
+                                  total_iters=int((epochs / 2) // len(dataloader) + 1))
 
+            epochs = int(epochs // len(dataloader) + 1)
             start_epoch = 0
             if gen_checkpoints.is_file():
                 print(f"Train: load state dict from {gen_checkpoints.as_posix()}")
@@ -248,6 +260,8 @@ if __name__ == '__main__':
             for x in range(start_epoch, epochs):
                 train_srgan(gen_net, dis_net, dataloader, content_loss_compute, adv_loss_compute,
                             optimizer_g, optimizer_d, scaler, x)
+                schedule_g.step()
+                schedule_d.step()
                 torch.save({'gen_net': gen_net.state_dict(),
                             "dis_net": dis_net.state_dict(),
                             "optimizer_g": optimizer_g.state_dict(),
