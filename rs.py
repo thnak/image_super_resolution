@@ -89,10 +89,10 @@ def runer(**kwargs):
         high, width = 0, 0
         pbar = tqdm(sliding_window(image, step_size), total=total_inter_sliding_window(image, step_size))
         for step_size, _, _, window_img in pbar:
-            window_img = norm_(window_img).unsqueeze(0).to(device)
+            window_img = window_img.unsqueeze(0).to(device)
             with autocast(device_type=device.type, enabled=device.type == 'cuda'):
                 window_img = model(window_img)
-            window_img = tanh_2_pil(window_img)
+            # window_img = tanh_2_pil(window_img)
             r_b, r_c, r_h, r_w = window_img.size()
             if result_image is None:
                 if step_size[0] == r_h:

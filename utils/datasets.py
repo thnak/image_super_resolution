@@ -74,6 +74,27 @@ class Normalize(Module):
         return inputs
 
 
+class DeNormalize(Module):
+    """de-normalize tensor to range [0, 1]"""
+
+    def __init__(self, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], max_pixel_value=255., dim=3):
+        super().__init__()
+        if dim == 4:
+            mean = torch.tensor(mean).unsqueeze(0).unsqueeze(2).unsqueeze(3)
+            std = torch.tensor(std).unsqueeze(0).unsqueeze(2).unsqueeze(3)
+        else:
+            mean = torch.tensor(mean).unsqueeze(1).unsqueeze(2)
+            std = torch.tensor(std).unsqueeze(1).unsqueeze(2)
+        self.register_buffer("mean", mean)
+        self.register_buffer("std", std)
+        self.register_buffer("max_pixel_value", torch.tensor(max_pixel_value))
+
+    def forward(self, inputs):
+        inputs *= self.std
+        inputs += self.mean
+        return inputs
+
+
 class PIL_to_tanh(Module):
     def __init__(self, max_pixel_value=255.):
         super().__init__()

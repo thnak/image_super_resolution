@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import torch
 import torchvision
 from torch import nn
@@ -34,9 +36,9 @@ class residual_block_1(nn.Module):
         super(residual_block_1, self).__init__()
         act = fix_problem_with_reuse_activation_funtion(act)
         self.m = nn.Sequential(
-            Conv(in_channel, hidden_channel, 3, 1, None, act=act),
+            Conv(in_channel, hidden_channel, 1, 1, None, act=act),
             Conv(hidden_channel, hidden_channel, kernel, 1, None, act=act),
-            Conv(hidden_channel, out_channel, 3, 1, None, act=False))
+            Conv(hidden_channel, out_channel, 1, 1, None, act=False))
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, inputs: torch.Tensor):
@@ -73,6 +75,31 @@ class elan(nn.Module):
         output_list.append(self.conv2(output_list[1]))
         output_list.append(self.conv3(output_list[2]))
         return torch.cat(output_list, 1)
+
+
+class Inception(nn.Module):
+    def __init__(self, in_channel, out_channel, act=any):
+        super().__init__()
+        assert out_channel >= 4, f"Inception node must have output channels >= 4, got {out_channel}"
+        self.conv1 = Conv(in_channel, out_channel // 4, 1, 1, act=False)
+        conv2_1 = Conv(in_channel, out_channel // 4, 1, 1, act=nn.PReLU())
+        conv2_2 = Conv(out_channel // 4, out_channel // 4, 5, 1, act=False)
+        self.conv2 = nn.Sequential(conv2_1, conv2_2)
+
+        conv3_1 = Conv(in_channel, out_channel // 4, 1, 1, act=nn.PReLU())
+        conv3_2 = Conv(out_channel // 4, out_channel // 4, 7, 1, act=False)
+        self.conv3 = nn.Sequential(conv3_1, conv3_2)
+
+        self.conv4 = nn.Sequential(nn.MaxPool2d(3, stride=1, padding=1),
+                                   Conv(in_channel, out_channel // 4, 1, 1, act=False))
+        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
+
+    def forward(self, inputs):
+        feed_0 = self.conv1(inputs)
+        feed_1 = self.conv2(inputs)
+        feed_2 = self.conv3(inputs)
+        feed_3 = self.conv4(inputs)
+        return self.act(torch.cat([feed_0, feed_1, feed_2, feed_3], dim=1))
 
 
 def fuse_conv_and_bn(conv, bn):
@@ -287,9 +314,9 @@ class ResNet(nn.Module):
     def __init__(self, num_block_resnet=16):
         super(ResNet, self).__init__()
 
-        self.conv0 = nn.Sequential(Conv(3, 64, 9, 1, act=False))
+        self.conv0 = nn.Sequential(Inception(3, 64, act=False))
         residual = [residual_block_1(64, 64,
-                                     128, 5,
+                                     128, 3,
                                      act=nn.PReLU()) for x in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
@@ -343,6 +370,42 @@ class Denoise(nn.Module):
         return inputs
 
 
+def sliding_window(image: torch.Tensor, step: int | list[int, int] | tuple[int, int], windowSize=None):
+    """accept ...CHW"""
+    if windowSize is None:
+        windowSize = step
+    if isinstance(step, int):
+        step = [step] * 2
+    step[0] = min(image.shape[-2], step[0])
+    step[1] = min(image.shape[-1], step[1])
+
+    for y in range(0, image.shape[-2], step[0]):
+        for x in range(0, image.shape[-1], step[1]):
+            yield step, x, y, image[..., y:y + windowSize, x:x + windowSize]
+
+
+class WindowSlide(nn.Module):
+    def __init__(self, scaleFactor, model):
+        super().__init__()
+        self.scaleFactor = scaleFactor
+        self.net = model
+
+    def forward(self, inputs):
+        b, c, h, w = inputs.size()
+        results = torch.zeros([b, c, h * self.scaleFactor, w * self.scaleFactor], dtype=inputs.dtype)
+        start_row = start_col = 0
+        for _, _, _, window in sliding_window(inputs, 96):
+            window = self.net(window)
+            _, _, win_h, win_w = window.size()
+
+            results = results[..., start_col:start_col + win_h, start_row:start_row + win_w]
+            start_row += win_w
+            if start_row >= results.size(-2):
+                start_row = 0
+                start_col += win_h
+        return results
+
+
 class Model(nn.Module):
     mean = None
     std = None
@@ -352,7 +415,11 @@ class Model(nn.Module):
         self.net = model
 
     def init_normalize(self, mean, std):
-        self.net = nn.Sequential(Normalize(mean, std, dim=4), self.net)
+        self.net = nn.Sequential(Normalize(mean, std, dim=4), self.net, Tanh_to_ImageArray())
+
+    def init_windowslice(self, feed):
+
+        pass
 
     def forward(self, inputs: torch.Tensor):
         return self.net(inputs)
@@ -376,15 +443,14 @@ class Model(nn.Module):
 if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.jit.enable_onednn_fusion(True)
-    model = Model(Denoise(8))
-    # model.eval().fuse()
-    feed = torch.zeros([1, 3, 96, 96])
-    # ckpt = torch.load("/home/thanh/Documents/github/image_super_resolution/denoise_checkpoint.pt", "cpu")
-    # model.net.load_state_dict(ckpt['model'])
-    # model.init_normalize(ckpt['mean'], ckpt['std'])
+    model = Model(ResNet(16))
+
+    feed = torch.zeros([1, 3, 320, 320])
+    ckpt = torch.load("../res_checkpoint.pt", "cpu")
+    model.net.load_state_dict(ckpt['model'])
+    model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False
-        x.grad = None
     model.eval().fuse()
 
     n_p = sum([x.numel() for x in model.parameters()])
@@ -392,12 +458,13 @@ if __name__ == '__main__':
     from time import perf_counter
 
     t0 = perf_counter()
-    for x in range(10):
+    for x in range(1):
         model(feed)
     print(f"times: {perf_counter() - t0}")
     jit_m = torch.jit.trace(model, feed)
     torch.jit.save(jit_m, "model.pt")
-    torch.onnx.export(model, feed, "model.onnx")
+    axe = {'images': {2: "x", 3: "x"}}
+    torch.onnx.export(model, feed, "model.onnx", input_names=['images'], output_names=["rs"], dynamic_axes=axe)
     import onnx
     from onnxsim import simplify
 
