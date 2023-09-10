@@ -332,7 +332,7 @@ class ResNet(nn.Module):
         self.conv0 = nn.Sequential(Inception(3, 64, act=False))
         residual = [ResidualBlock3(64, 64,
                                    128, 3,
-                                   act=nn.PReLU()) for x in range(num_block_resnet)]
+                                   act=False) for x in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
@@ -461,15 +461,15 @@ if __name__ == '__main__':
     model = Model(ResNet(16))
 
     feed = torch.zeros([1, 3, 224, 224])
-    ckpt = torch.load("../res_checkpoint.pt", "cpu")
-    model.net.load_state_dict(ckpt['model'])
+    # ckpt = torch.load("../res_checkpoint.pt", "cpu")
+    # model.net.load_state_dict(ckpt['model'])
     # model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False
     model.eval().fuse()
     import torch_directml
 
-    device = torch_directml.device(0)
+    device = 'cpu'
     model.to(device)
     feed = feed.to(device)
     n_p = sum([x.numel() for x in model.parameters()])
@@ -477,17 +477,17 @@ if __name__ == '__main__':
     from time import perf_counter
 
     t0 = perf_counter()
-    for x in range(10):
+    for x in range(1):
         model(feed)
     print(f"times: {perf_counter() - t0}")
-    # jit_m = torch.jit.trace(model, feed)
-    # torch.jit.save(jit_m, "model.pt")
-    # axe = {'images': {2: "x", 3: "x"}}
-    # torch.onnx.export(model, feed, "model.onnx", input_names=['images'], output_names=["rs"], dynamic_axes=axe)
-    # import onnx
-    # from onnxsim import simplify
-    #
-    # onnx_model = onnx.load('model.onnx')
-    # onnx_model, c = simplify(onnx_model)
-    # onnx.save(onnx_model, "model.onnx")
-    # print(feed.shape)
+    jit_m = torch.jit.trace(model, feed)
+    torch.jit.save(jit_m, "model.pt")
+    axe = {'images': {2: "x", 3: "x"}}
+    torch.onnx.export(model, feed, "model.onnx", input_names=['images'], output_names=["rs"], dynamic_axes=axe)
+    import onnx
+    from onnxsim import simplify
+
+    onnx_model = onnx.load('model.onnx')
+    onnx_model, c = simplify(onnx_model)
+    onnx.save(onnx_model, "model.onnx")
+    print(feed.shape)
