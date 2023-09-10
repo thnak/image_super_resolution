@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from utils.models import Convert_tanh_value_norm, TruncatedVGG19
+from utils.models import ConvertTanh2Norm, TruncatedVGG19
 
 
 class Content_Loss:

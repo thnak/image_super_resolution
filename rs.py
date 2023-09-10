@@ -8,7 +8,7 @@ from torchvision.transforms.functional import resize, InterpolationMode
 from pathlib import Path
 from utils.general import VID_FORMATS, convert_image_to_jpg
 from utils.datasets import Normalize, RGB2BGR, init_dataloader_for_inference
-from utils.models import Tanh_to_PIL, Tanh_to_ImageArray
+from utils.models import Tanh2PIL, TanhToArrayImage
 from utils.ffmpeg import FFMPEG_recorder
 from tqdm import tqdm
 
@@ -52,7 +52,7 @@ def runer(**kwargs):
     rgb2bgr = RGB2BGR().to(device)
 
     if src.suffix in VID_FORMATS:
-        tanh_2_pil = Tanh_to_ImageArray().to(device)
+        tanh_2_pil = TanhToArrayImage().to(device)
         video_writer = None
         result_dir = result_dir.with_suffix('.mp4')
         dataloader, dataset = init_dataloader_for_inference(src, worker, batch_size=batch_size)
@@ -76,7 +76,7 @@ def runer(**kwargs):
         video_writer.addAudio(src.as_posix())
 
     else:
-        tanh_2_pil = Tanh_to_ImageArray().to(device)
+        tanh_2_pil = TanhToArrayImage().to(device)
         if src.suffix not in ['.jpg', ".png"]:
             src = convert_image_to_jpg(src)
         image = read_image(src.as_posix(), ImageReadMode.RGB)
