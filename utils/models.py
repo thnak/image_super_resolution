@@ -458,11 +458,11 @@ class Model(nn.Module):
 if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.jit.enable_onednn_fusion(True)
-    model = Model(SRGAN(ResNet(16)))
+    model = Model(ResNet(1))
 
     feed = torch.zeros([1, 3, 224, 224])
-    ckpt = torch.load("../gen_checkpoint.pt", "cpu")
-    model.net.load_state_dict(ckpt['gen_net'])
+    ckpt = torch.load("../res_checkpoint.pt", "cpu")
+    model.net.load_state_dict(ckpt['model'])
     model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False

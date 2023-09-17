@@ -90,6 +90,7 @@ def train_srgan(gen_net: SRGAN, dis_net: Discriminator, dataloader, content_loss
             sr_discriminated = dis_net(sr_images.detach())
             hr_discriminated = dis_net(hr_images)
             loss = adv_loss(sr_discriminated, hr_discriminated)
+
         optimizer_d.zero_grad()
         gradscaler.scale(loss).backward()
         gradscaler.unscale_(optimizer_d)
@@ -198,7 +199,7 @@ if __name__ == '__main__':
             print(f"{prefix}{n_P:,} parameters, {n_g:,} gradients")
             if res_checkpoints.is_file():
                 ckpt = torch.load(res_checkpoints.as_posix(), 'cpu')
-                checkpoint_state = intersect_dicts(ckpt['model'], model.state_dict())
+                checkpoint_state = intersect_dicts(ckpt['gen_net'], model.state_dict())
                 model.load_state_dict(checkpoint_state, strict=False)
                 if len(checkpoint_state) == len(model.state_dict()):
                     optimizer.load_state_dict(ckpt['optimizer'])
@@ -210,7 +211,7 @@ if __name__ == '__main__':
             for epoch in range(start_epoch, epochs):
                 train(model, dataloader, compute_loss, optimizer, scaler, epoch)
                 schedule.step()
-                torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(),
+                torch.save({"gen_net": model.state_dict(), "optimizer": optimizer.state_dict(),
                             "epoch": epoch, "mean": dataset.mean, "std": dataset.std},
                            res_checkpoints.as_posix())
 
@@ -247,8 +248,8 @@ if __name__ == '__main__':
                 if res_checkpoints.is_file():
                     gen_net.net.load_state_dict(torch.load(res_checkpoints, "cpu")['model'])
 
-            content_loss_compute = Content_Loss(device=device)
             adv_loss_compute = Adversarial()
+            content_loss_compute = Content_Loss(device=device, Bce=adv_loss_compute)
             gen_net.to(device)
             dis_net.to(device)
             n_P = sum([x.numel() for x in gen_net.parameters()])
