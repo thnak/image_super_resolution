@@ -1,10 +1,10 @@
 from __future__ import annotations
-
+import sys
 import torch
 import torchvision
 from torch import nn
 from tqdm import tqdm
-
+sys.path.append("./")
 from utils.general import fix_problem_with_reuse_activation_funtion, ACT_LIST, autopad, intersect_dicts
 from utils.datasets import Normalize
 
@@ -329,7 +329,7 @@ class ResNet(nn.Module):
     def __init__(self, num_block_resnet=16):
         super(ResNet, self).__init__()
 
-        self.conv0 = nn.Sequential(Inception(3, 64, act=False))
+        self.conv0 = nn.Sequential(Conv(3, 64, 9, act=False))
         residual = [ResidualBlock3(64, 64,
                                    128, 3,
                                    act=nn.PReLU()) for x in range(num_block_resnet)]
@@ -458,11 +458,11 @@ class Model(nn.Module):
 if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.jit.enable_onednn_fusion(True)
-    model = Model(ResNet(1))
+    model = Model(SRGAN(ResNet(12)))
 
     feed = torch.zeros([1, 3, 224, 224])
-    ckpt = torch.load("../res_checkpoint.pt", "cpu")
-    model.net.load_state_dict(ckpt['model'])
+    ckpt = torch.load("../gen_checkpoint.pt", "cpu")
+    model.net.load_state_dict(ckpt['gen_net'])
     model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False
