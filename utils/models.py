@@ -294,7 +294,7 @@ class Discriminator(nn.Module):
         self.adaptive_pool = nn.AdaptiveAvgPool2d((6, 6))
         self.fc1 = nn.Linear(out_channels * 6 * 6, fc_size)
         self.leaky_relu = nn.LeakyReLU(0.2)
-        self.fc2 = nn.Linear(1024, 1)
+        self.fc2 = nn.Linear(fc_size, 1)
 
     def forward(self, inputs):
         """

@@ -195,8 +195,7 @@ if __name__ == '__main__':
             model.to(device)
             n_P = sum([x.numel() for x in model.parameters()])
             n_g = sum(x.numel() for x in model.parameters() if x.requires_grad)  # number gradients
-
-            print(f"{prefix}{n_P:,} parameters, {n_g:,} gradients")
+            print(f"{prefix} {epochs} epochs, {n_P:,} parameters, {n_g:,} gradients")
             if res_checkpoints.is_file():
                 ckpt = torch.load(res_checkpoints.as_posix(), 'cpu')
                 checkpoint_state = intersect_dicts(ckpt['gen_net'], model.state_dict())
@@ -232,6 +231,10 @@ if __name__ == '__main__':
                                   total_iters=int((epochs / 2) // len(dataloader) + 1))
 
             epochs = int(epochs // len(dataloader) + 1)
+            n_P = sum([x.numel() for x in gen_net.parameters()])
+            n_g = sum(x.numel() for x in dis_net.parameters())  # number gradients
+            print(f"{prefix} {epochs} epochs, gen {n_P:,} parameters, dis {n_g:,} parameters")
+
             start_epoch = 0
             if gen_checkpoints.is_file():
                 print(f"Train: load state dict from {gen_checkpoints.as_posix()}")
@@ -246,7 +249,7 @@ if __name__ == '__main__':
                 del ckpt
             else:
                 if res_checkpoints.is_file():
-                    gen_net.net.load_state_dict(torch.load(res_checkpoints, "cpu")['model'])
+                    gen_net.net.load_state_dict(torch.load(res_checkpoints, "cpu")['gen_net'])
 
             adv_loss_compute = Adversarial()
             content_loss_compute = Content_Loss(device=device, Bce=adv_loss_compute)

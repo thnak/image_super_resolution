@@ -1,5 +1,13 @@
+import argparse
+
 from utils.general import create_data_lists
+
 if __name__ == '__main__':
-    create_data_lists(train_folders=["/home/thanh/Pictures/Screenshots"],
-                      test_folders=["/home/thanh/Pictures/Screenshots"],
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train_dirs", type=str, nargs="+", default='')
+    parser.add_argument("--val_dirs", type=str, nargs="+", default='')
+
+    opt = parser.parse_args()
+    create_data_lists(train_folders=opt.train_dirs,
+                      test_folders=opt.val_dirs,
                       min_size=100)
