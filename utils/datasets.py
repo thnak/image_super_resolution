@@ -232,9 +232,14 @@ class SR_dataset(Dataset):
         psum = torch.tensor([0.0, 0.0, 0.0])
         psum_sq = torch.tensor([0.0, 0.0, 0.0])
         count = 0
-        for x in enumerate(pbar):
-            image = read_image(self.samples[x], ImageReadMode.RGB)  # CHW
-            count += image.size(1) + image.size(2)
+        for x in pbar:
+
+            try:
+              image = read_image(self.samples[x], ImageReadMode.RGB)  # CHW
+            except Exception as ex:
+              self.samples[x] = convert_image_to_jpg(self.samples[x]).as_posix()
+              image = read_image(self.samples[x], ImageReadMode.RGB)  # CHW
+            count += image.size(1) * image.size(2)
             image = image.float()
             image /= 255.
             image = torch.unsqueeze(image, 0)
