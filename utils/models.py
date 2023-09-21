@@ -4,6 +4,7 @@ import torch
 import torchvision
 from torch import nn
 from tqdm import tqdm
+
 sys.path.append("./")
 from utils.general import fix_problem_with_reuse_activation_funtion, ACT_LIST, autopad, intersect_dicts
 from utils.datasets import Normalize
@@ -19,7 +20,8 @@ class Conv(nn.Module):
             d = 1
         act = fix_problem_with_reuse_activation_funtion(act)
         assert 0 <= dropout <= 1, f"dropout rate must be 0 <= dropout <= 1, your {dropout}"
-        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
+        pad = autopad(k, p, d) if isinstance(k, int) else [autopad(k[0], p, d), autopad(k[1], p, d)]
+        self.conv = nn.Conv2d(c1, c2, k, s, pad, groups=g, dilation=d, bias=False)
         self.bn = nn.BatchNorm2d(c2)
         self.drop = nn.Dropout(p=dropout) if dropout > 0. else nn.Identity()
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
@@ -73,8 +75,6 @@ class ResidualBlock3(nn.Module):
         return self.act(inputs + self.m(inputs))
 
 
-
-
 class elan(nn.Module):
     def __init__(self, in_channels, out_channels, act, dropout=0.):
         super(elan, self).__init__()
@@ -98,17 +98,21 @@ class Inception(nn.Module):
         super().__init__()
         assert out_channel >= 4, f"Inception node must have output channels >= 4, got {out_channel}"
 
-        self.conv1 = Conv(in_channel, out_channel , 1, 1, act=False)
-        conv2_1 = Conv(in_channel, out_channel , 1, 1, act=act)
-        conv2_2 = Conv(out_channel , out_channel , 5, 1, act=False)
-        self.conv2 = nn.Sequential(conv2_1, conv2_2)
+        self.conv1 = Conv(in_channel, out_channel, 1, 1, act=False)
+        conv2_1 = Conv(in_channel, out_channel, 1, 1, act=act)
+        conv2_2_1 = Conv(out_channel, out_channel, (5, 1), 1, act=False)
+        conv2_2_2 = Conv(out_channel, out_channel, (1, 5), 1, act=False)
 
-        conv3_1 = Conv(in_channel, out_channel , 1, 1, act=act)
-        conv3_2 = Conv(out_channel , out_channel , 7, 1, act=False)
-        self.conv3 = nn.Sequential(conv3_1, conv3_2)
+        self.conv2 = nn.Sequential(conv2_1, conv2_2_1, conv2_2_2)
+
+        conv3_1 = Conv(in_channel, out_channel, 1, 1, act=act)
+        conv3_2_1 = Conv(out_channel, out_channel, (7, 1), 1, act=False)
+        conv3_2_2 = Conv(out_channel, out_channel, (1, 7), 1, act=False)
+
+        self.conv3 = nn.Sequential(conv3_1, conv3_2_1, conv3_2_2)
 
         self.conv4 = nn.Sequential(nn.MaxPool2d(3, stride=1, padding=1),
-                                   Conv(in_channel, out_channel , 1, 1, act=False))
+                                   Conv(in_channel, out_channel, 1, 1, act=False))
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, inputs):
@@ -116,7 +120,7 @@ class Inception(nn.Module):
         feed_1 = self.conv2(inputs)
         feed_2 = self.conv3(inputs)
         feed_3 = self.conv4(inputs)
-        return self.act(feed_0+ feed_1 + feed_2 +feed_3)
+        return self.act(feed_0 + feed_1 + feed_2 + feed_3)
 
 
 def fuse_conv_and_bn(conv, bn):
@@ -338,7 +342,9 @@ class ResNet(nn.Module):
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
-        self.scaler = nn.Sequential(*[Scaler(64, 64, 2, 3, nn.LeakyReLU()) for x in range(2)])
+        self.scaler = nn.Sequential(*[Scaler(64, 64,
+                                             2, 3,
+                                             nn.LeakyReLU()) for x in range(2)])
         self.conv2 = nn.Sequential(Conv(64, 3, 9, 1, act=nn.Tanh()))
 
     def forward(self, inputs: torch.Tensor):
@@ -460,26 +466,33 @@ class Model(nn.Module):
 if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.jit.enable_onednn_fusion(True)
-    model = Model(SRGAN(ResNet(16)))
+    model = Model(ResNet(16))
 
-    feed = torch.zeros([1, 3, 224, 224])
-    ckpt = torch.load("../gen_checkpoint.pt", "cpu")
-    model.net.load_state_dict(ckpt['gen_net'])
-    model.init_normalize(ckpt['mean'], ckpt['std'])
+    # ckpt = torch.load("../res_checkpoint.pt", "cpu")
+    # model.net.load_state_dict(ckpt['gen_net'])
+    # model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False
     model.eval().fuse()
-    import torch_directml
+    try:
+        import torch_directml
 
-    device = 'cpu'
+        device = torch_directml.device(0)
+    except Exception as ex:
+        device = torch.device(0) if torch.cuda.is_available() else "cpu"
     model.to(device)
-    feed = feed.to(device)
+    feed = torch.zeros([1, 3, 224, 224], device=device)
+
+    if torch.cuda.is_available():
+        model.half()
+        feed = feed.half()
+
     n_p = sum([x.numel() for x in model.parameters()])
     print(f"{n_p:,}")
     from time import perf_counter
 
     t0 = perf_counter()
-    for x in range(1):
+    for x in range(10):
         model(feed)
     print(f"times: {perf_counter() - t0}")
     jit_m = torch.jit.trace(model, feed)

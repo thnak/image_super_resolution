@@ -97,7 +97,7 @@ def convert_image_to_jpg(image_file: str | Path):
     if image_file.suffix == '.png':
         image = image.convert("RGB")
     save_dir = image_file.with_suffix(".jpg")
-    image.save(save_dir)
+    image.save(save_dir, format="JPEG", quality=95)
     image_file.unlink()
     return save_dir
 

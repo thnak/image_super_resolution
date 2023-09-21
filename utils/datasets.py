@@ -210,7 +210,7 @@ class SR_dataset(Dataset):
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
 
-    def __init__(self, json_path, target_size, scales_factor, prefix=""):
+    def __init__(self, json_path, target_size, scales_factor, calculateNorm=True, prefix=""):
         json_path = json_path if isinstance(json_path, Path) else Path(json_path)
         with open(json_path.as_posix(), "r") as fi:
             self.samples = json.load(fi)
@@ -219,16 +219,49 @@ class SR_dataset(Dataset):
         self.target_size = target_size
         self.scale_factor = scales_factor
         self.crop = Random_position(target_size=target_size)
+        if calculateNorm:
+            self.calculateNormValues()
         self.transform_lr = Compose([Random_low_rs(target_size, scales_factor),
                                      Normalize(mean=self.mean, std=self.std)])
         self.transform_hr = PIL_to_tanh()  # - > tanh
+
+    def calculateNormValues(self):
+        prefix = ""
+        total_sample = len(self.samples)
+        pbar = tqdm(range(total_sample), total=total_sample)
+        psum = torch.tensor([0.0, 0.0, 0.0])
+        psum_sq = torch.tensor([0.0, 0.0, 0.0])
+        count = 0
+        for x in enumerate(pbar):
+            image = read_image(self.samples[x], ImageReadMode.RGB)  # CHW
+            count += image.size(1) + image.size(2)
+            image = image.float()
+            image /= 255.
+            image = torch.unsqueeze(image, 0)
+            psum += image.sum(axis=[0, 2, 3])
+            psum_sq += (image ** 2).sum(axis=[0, 2, 3])
+
+            pbar.set_description(f"{prefix}Collecting data to calculate mean, std...")
+            if x >= total_sample - 10:
+                # mean and std
+                total_mean = psum / count
+                total_var = (psum_sq / count) - (total_mean ** 2)
+                total_std = torch.sqrt(total_var)
+                self.mean = total_mean.cpu().numpy().tolist()
+                self.std = total_std.cpu().numpy().tolist()
+                pbar.set_description(f"{prefix}Using mean: {self.mean}, std: {self.std} for this dataset.")
 
     def set_transform_hr(self):
         """set transform for srgen"""
         self.transform_hr = Normalize(self.mean, self.std)
 
     def __getitem__(self, item):
-        image = read_image(self.samples[item], ImageReadMode.RGB)  # CHW
+        try:
+            image = read_image(self.samples[item], ImageReadMode.RGB)  # CHW
+        except Exception as ex:
+            self.samples[item] = convert_image_to_jpg(self.samples[item])
+            image = read_image(self.samples[item], ImageReadMode.RGB)  # CHW
+
         image = self.crop(image)
         return self.transform_hr(image), self.transform_lr(image)
 
@@ -334,5 +367,5 @@ def init_dataloader_for_inference(src, worker, batch_size):
     if isinstance(src, str):
         src = Path(src)
     dataset = dataset_for_inference(src)
-    dataloader = DataLoader(dataset, batch_size, shuffle=False, num_workers=worker)
+    dataloader = DataLoader(dataset, batch_size, shuffle=True, num_workers=worker)
     return dataloader, dataset
