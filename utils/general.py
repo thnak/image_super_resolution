@@ -58,7 +58,7 @@ def create_data_lists(train_folders, test_folders, min_size, output_folder="./")
     print("\nCreating data lists... this may take some time.\n")
     train_images = []
     for d in train_folders:
-        for i in Path(d).iterdir():
+        for i in Path(d).rglob('*'):
             if i.suffix in IMG_FORMATS:
                 image = Image.open(i.as_posix())
                 if image.width < min_size or image.height < min_size:
@@ -73,7 +73,7 @@ def create_data_lists(train_folders, test_folders, min_size, output_folder="./")
         json.dump(train_images, j)
     train_images = []
     for d in test_folders:
-        for i in Path(d).iterdir():
+        for i in Path(d).rglob("*"):
             if i.suffix in IMG_FORMATS:
                 image = Image.open(i.as_posix())
                 if image.width < min_size or image.height < min_size:
@@ -94,7 +94,7 @@ def convert_image_to_jpg(image_file: str | Path):
     if isinstance(image_file, str):
         image_file = Path(image_file)
     image = Image.open(image_file.as_posix())
-    if image_file.suffix == '.png':
+    if image.mode in ("RGBA", "P"):
         image = image.convert("RGB")
     save_dir = image_file.with_suffix(".jpg")
     image.save(save_dir, format="JPEG", quality=95)

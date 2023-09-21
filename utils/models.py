@@ -100,16 +100,13 @@ class Inception(nn.Module):
 
         self.conv1 = Conv(in_channel, out_channel, 1, 1, act=False)
         conv2_1 = Conv(in_channel, out_channel, 1, 1, act=act)
-        conv2_2_1 = Conv(out_channel, out_channel, (5, 1), 1, act=False)
-        conv2_2_2 = Conv(out_channel, out_channel, (1, 5), 1, act=False)
-
-        self.conv2 = nn.Sequential(conv2_1, conv2_2_1, conv2_2_2)
+        conv2_2_1 = Conv(out_channel, out_channel, 5, 1, act=False)
+        self.conv2 = nn.Sequential(conv2_1, conv2_2_1)
 
         conv3_1 = Conv(in_channel, out_channel, 1, 1, act=act)
-        conv3_2_1 = Conv(out_channel, out_channel, (7, 1), 1, act=False)
-        conv3_2_2 = Conv(out_channel, out_channel, (1, 7), 1, act=False)
+        conv3_2_1 = Conv(out_channel, out_channel, 7, 1, act=False)
 
-        self.conv3 = nn.Sequential(conv3_1, conv3_2_1, conv3_2_2)
+        self.conv3 = nn.Sequential(conv3_1, conv3_2_1)
 
         self.conv4 = nn.Sequential(nn.MaxPool2d(3, stride=1, padding=1),
                                    Conv(in_channel, out_channel, 1, 1, act=False))
@@ -466,18 +463,18 @@ class Model(nn.Module):
 if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.jit.enable_onednn_fusion(True)
-    model = Model(ResNet(16))
+    model = Model(SRGAN(ResNet(16)))
 
-    # ckpt = torch.load("../res_checkpoint.pt", "cpu")
-    # model.net.load_state_dict(ckpt['gen_net'])
-    # model.init_normalize(ckpt['mean'], ckpt['std'])
+    ckpt = torch.load("../gen_checkpoint.pt", "cpu")
+    model.net.load_state_dict(ckpt['gen_net'])
+    model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False
     model.eval().fuse()
     try:
         import torch_directml
 
-        device = torch_directml.device(0)
+        device = 'cpu'
     except Exception as ex:
         device = torch.device(0) if torch.cuda.is_available() else "cpu"
     model.to(device)
@@ -492,7 +489,7 @@ if __name__ == '__main__':
     from time import perf_counter
 
     t0 = perf_counter()
-    for x in range(10):
+    for x in range(1):
         model(feed)
     print(f"times: {perf_counter() - t0}")
     jit_m = torch.jit.trace(model, feed)
