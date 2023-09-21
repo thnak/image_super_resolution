@@ -380,5 +380,5 @@ def init_dataloader_for_inference(src, worker, batch_size):
     if isinstance(src, str):
         src = Path(src)
     dataset = dataset_for_inference(src)
-    dataloader = DataLoader(dataset, batch_size, shuffle=True, num_workers=worker)
+    dataloader = DataLoader(dataset, batch_size, shuffle=False, num_workers=worker)
     return dataloader, dataset
