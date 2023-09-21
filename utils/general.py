@@ -15,6 +15,8 @@ IMG_FORMATS = ['.bmp', '.jpg', '.jpeg', '.png', '.tif', '.tiff', '.dng', '.webp'
 VID_FORMATS = ['.asf', '.mov', '.avi', '.mp4', '.mpg', '.mpeg', '.m4v', '.wmv', '.mkv',
                '.gif']
 
+torchvisionImage_Formats = [".png", ".jpg", ".jpeg"]
+
 
 def ground_up(intput_number, stride):
     if intput_number % stride == 0:
@@ -63,7 +65,14 @@ def create_data_lists(train_folders, test_folders, min_size, output_folder="./")
                 image = Image.open(i.as_posix())
                 if image.width < min_size or image.height < min_size:
                     print(f"ignore small image {i.as_posix()} require {min_size}")
+                    i.unlink(True)
                 else:
+                    if i.suffix not in torchvisionImage_Formats:
+                        i = convert_image_to_jpg(i)
+                    try:
+                        image.verify()
+                    except:
+                        continue
                     train_images.append(i.as_posix())
 
     print("There are %d images in the training data.\n" % len(train_images))
@@ -78,7 +87,14 @@ def create_data_lists(train_folders, test_folders, min_size, output_folder="./")
                 image = Image.open(i.as_posix())
                 if image.width < min_size or image.height < min_size:
                     print(f"ignore small image {i.as_posix()} require {min_size}")
+                    i.unlink(True)
                 else:
+                    if i.suffix not in torchvisionImage_Formats:
+                        i = convert_image_to_jpg(i)
+                    try:
+                        image.verify()
+                    except:
+                        continue
                     train_images.append(i.as_posix())
 
     print("There are %d images in the validating data.\n" % len(train_images))

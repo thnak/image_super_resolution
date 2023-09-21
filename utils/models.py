@@ -75,6 +75,44 @@ class ResidualBlock3(nn.Module):
         return self.act(inputs + self.m(inputs))
 
 
+class RDB(nn.Module):
+    """Residual Dense Block"""
+
+    def __init__(self, filter, act):
+        super().__init__()
+        self.conv0 = nn.Sequential(nn.Conv2d(filter, filter, 1, 1, 0),
+                                   fix_problem_with_reuse_activation_funtion(act))
+        self.conv1 = nn.Sequential(nn.Conv2d(filter, filter, 3, 1, 1),
+                                   fix_problem_with_reuse_activation_funtion(act))
+        self.conv2 = nn.Sequential(nn.Conv2d(filter, filter, 3, 1, 1),
+                                   fix_problem_with_reuse_activation_funtion(act))
+        self.conv3 = nn.Sequential(nn.Conv2d(filter, filter, 3, 1, 1),
+                                   fix_problem_with_reuse_activation_funtion(act))
+        self.conv = Conv(filter, filter, 1, 1, 0)
+
+    def forward(self, inputs):
+        output0 = self.conv0(inputs) + inputs
+        output1 = self.conv1(output0) + output0 + inputs
+        output2 = self.conv2(output1) + output0 + output1 + inputs
+        output3 = self.conv3(output2) + output0 + output1 + output2 + inputs
+        return self.conv(inputs + output0 + output1 + output2 + output3)
+
+
+class RRDB(nn.Module):
+    """Residual in Residual Dense Block"""
+
+    def __init__(self, in_channel: int, out_channel: int, hidden_channel: int, kernel: any, act: any, *args, **kwargs):
+        super().__init__()
+        act = fix_problem_with_reuse_activation_funtion(act)
+        self.m = nn.Sequential(Conv(in_channel, hidden_channel, kernel, 1, None, act=act),
+                               RDB(hidden_channel, act),
+                               fix_problem_with_reuse_activation_funtion(act),
+                               Conv(hidden_channel, out_channel, kernel, 1, None, act=False))
+
+    def forward(self, inputs: torch.Tensor):
+        return inputs + self.m(inputs)
+
+
 class elan(nn.Module):
     def __init__(self, in_channels, out_channels, act, dropout=0.):
         super(elan, self).__init__()

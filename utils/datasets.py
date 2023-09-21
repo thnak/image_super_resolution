@@ -232,13 +232,17 @@ class SR_dataset(Dataset):
         psum = torch.tensor([0.0, 0.0, 0.0])
         psum_sq = torch.tensor([0.0, 0.0, 0.0])
         count = 0
+        corrupt = []
         for x in pbar:
-
             try:
-              image = read_image(self.samples[x], ImageReadMode.RGB)  # CHW
-            except Exception as ex:
-              self.samples[x] = convert_image_to_jpg(self.samples[x]).as_posix()
-              image = read_image(self.samples[x], ImageReadMode.RGB)  # CHW
+                try:
+                    image = read_image(self.samples[x], ImageReadMode.RGB)  # CHW
+                except Exception as ex:
+                    self.samples[x] = convert_image_to_jpg(self.samples[x]).as_posix()
+                    image = read_image(self.samples[x], ImageReadMode.RGB)  # CHW
+            except:
+                corrupt.append(x)
+                continue
             count += image.size(1) * image.size(2)
             image = image.float()
             image /= 255.
@@ -247,14 +251,18 @@ class SR_dataset(Dataset):
             psum_sq += (image ** 2).sum(axis=[0, 2, 3])
 
             pbar.set_description(f"{prefix}Collecting data to calculate mean, std...")
-            if x >= total_sample - 10:
-                # mean and std
-                total_mean = psum / count
-                total_var = (psum_sq / count) - (total_mean ** 2)
-                total_std = torch.sqrt(total_var)
-                self.mean = total_mean.cpu().numpy().tolist()
-                self.std = total_std.cpu().numpy().tolist()
-                pbar.set_description(f"{prefix}Using mean: {self.mean}, std: {self.std} for this dataset.")
+            # mean and std
+            total_mean = psum / count
+            total_var = (psum_sq / count) - (total_mean ** 2)
+            total_std = torch.sqrt(total_var)
+            self.mean = total_mean.cpu().numpy().tolist()
+            self.std = total_std.cpu().numpy().tolist()
+            pbar.set_description(f"{prefix}Using mean: {self.mean}, std: {self.std} for this dataset.")
+        if len(corrupt) > 0:
+            print(f"total {len(corrupt)} corrupt")
+        for x in corrupt:
+            print(f"removed corrupt image {self.samples[x]}")
+            self.samples.pop(x)
 
     def set_transform_hr(self):
         """set transform for srgen"""
