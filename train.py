@@ -42,7 +42,7 @@ def train(model: any, dataloader, compute_loss: MSELoss, optimizer: any, gradsca
     for idx, (hr_images, lr_images) in enumerate(pbar):
         optimizer.zero_grad()
         hr_images, lr_images = hr_images.to(device), lr_images.to(device)
-        with autocast(device_type=device.type,
+        with autocast(device_type=device.type if device.type == 'cuda' else 'cpu',
                       enabled=device.type == 'cuda'):
             preds = model(lr_images)
             loss = compute_loss(preds, hr_images)
@@ -118,6 +118,9 @@ if __name__ == '__main__':
     parser.add_argument("--weight_decay", type=float, default=0.00059)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--epochs", type=int, default=300)
+    parser.add_argument("--dml", action="store_true")
+    parser.add_argument("--mean", action="store_true")
+
 
     opt = parser.parse_args()
     json_file = Path("./train_images.json")
@@ -129,7 +132,11 @@ if __name__ == '__main__':
     gen_checkpoints = work_dir / gen_checkpoints
     denoise_checkpoints = work_dir / denoise_checkpoints
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    device = torch.device(device)
+    if opt.dml:
+        import torch_directml
+        device = torch_directml.device(0)
+    else:
+        device = torch.device(device)
     lr = opt.lr
     epochs = opt.epochs
     weight_decay = opt.weight_decay
@@ -178,7 +185,7 @@ if __name__ == '__main__':
                         "std": dataset.std}, denoise_checkpoints.as_posix())
 
     else:
-        dataset = SR_dataset(json_file, 96, 4, "Train: ")
+        dataset = SR_dataset(json_file, 96, 4, opt.mean, "Train: ")
         if not opt.resnet:
             dataset.set_transform_hr()
         dataloader = init_dataloader(dataset, batch_size=batch_size, num_worker=workers)[0]

@@ -65,12 +65,14 @@ def create_data_lists(train_folders, test_folders, min_size, output_folder="./")
                 image = Image.open(i.as_posix())
                 if image.width < min_size or image.height < min_size:
                     print(f"ignore small image {i.as_posix()} require {min_size}")
+                    image.close()
                     i.unlink(True)
                 else:
                     if i.suffix not in torchvisionImage_Formats:
                         i = convert_image_to_jpg(i)
                     try:
                         image.verify()
+                        image.close()
                     except:
                         continue
                     train_images.append(i.as_posix())

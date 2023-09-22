@@ -371,9 +371,9 @@ class ResNet(nn.Module):
         super(ResNet, self).__init__()
 
         self.conv0 = nn.Sequential(Conv(3, 64, 9, act=False))
-        residual = [ResidualBlock3(64, 64,
-                                   128, 3,
-                                   act=nn.LeakyReLU()) for x in range(num_block_resnet)]
+        residual = [RRDB(64, 64,
+                         128, 3,
+                         act=nn.LeakyReLU()) for x in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
@@ -501,18 +501,17 @@ class Model(nn.Module):
 if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.jit.enable_onednn_fusion(True)
-    model = Model(SRGAN(ResNet(16)))
+    model = Model(ResNet(16))
 
-    ckpt = torch.load("../gen_checkpoint.pt", "cpu")
-    model.net.load_state_dict(ckpt['gen_net'])
-    model.init_normalize(ckpt['mean'], ckpt['std'])
+    # ckpt = torch.load("../gen_checkpoint.pt", "cpu")
+    # model.net.load_state_dict(ckpt['gen_net'])
+    # model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False
     model.eval().fuse()
     try:
         import torch_directml
-
-        device = 'cpu'
+        device = torch_directml.device(0)
     except Exception as ex:
         device = torch.device(0) if torch.cuda.is_available() else "cpu"
     model.to(device)
@@ -530,15 +529,15 @@ if __name__ == '__main__':
     for x in range(1):
         model(feed)
     print(f"times: {perf_counter() - t0}")
-    jit_m = torch.jit.trace(model, feed)
-    torch.jit.save(jit_m, "model.pt")
-    axe = {'images': {2: "x", 3: "x"}, "outputs": {}}
-    torch.onnx.export(model, feed, "model.onnx", dynamic_axes=axe,
-                      input_names=["images"], output_names=["outputs"])
-    import onnx
-    from onnxsim import simplify
-
-    onnx_model = onnx.load('model.onnx')
-    onnx_model, c = simplify(onnx_model)
-    onnx.save(onnx_model, "model.onnx")
-    print(feed.shape)
+    # jit_m = torch.jit.trace(model, feed)
+    # torch.jit.save(jit_m, "model.pt")
+    # axe = {'images': {2: "x", 3: "x"}, "outputs": {}}
+    # torch.onnx.export(model, feed, "model.onnx", dynamic_axes=axe,
+    #                   input_names=["images"], output_names=["outputs"])
+    # import onnx
+    # from onnxsim import simplify
+    #
+    # onnx_model = onnx.load('model.onnx')
+    # onnx_model, c = simplify(onnx_model)
+    # onnx.save(onnx_model, "model.onnx")
+    # print(feed.shape)
