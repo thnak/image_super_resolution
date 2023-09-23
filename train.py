@@ -40,19 +40,20 @@ def train(model: any, dataloader, compute_loss: MSELoss, optimizer: any, gradsca
 
     pbar = tqdm(dataloader, total=len(dataloader))
     for idx, (hr_images, lr_images) in enumerate(pbar):
-        optimizer.zero_grad()
         hr_images, lr_images = hr_images.to(device), lr_images.to(device)
-        with autocast(device_type=device.type if device.type == 'cuda' else 'cpu',
-                      enabled=device.type == 'cuda'):
-            preds = model(lr_images)
-            loss = compute_loss(preds, hr_images)
-        gradscaler.scale(loss).backward()
-        gradscaler.unscale_(optimizer)
-        clip_grad_norm_(model.parameters(), 10)
-        gradscaler.step(optimizer)
-        gradscaler.update()
+        for _ in range(10):
+            optimizer.zero_grad()
+            with autocast(device_type=device.type if device.type == 'cuda' else 'cpu',
+                          enabled=device.type == 'cuda'):
+                preds = model(lr_images)
+                loss = compute_loss(preds, hr_images)
+            gradscaler.scale(loss).backward()
+            gradscaler.unscale_(optimizer)
+            clip_grad_norm_(model.parameters(), 10)
+            gradscaler.step(optimizer)
+            gradscaler.update()
 
-        losses.append(loss.item())
+            losses.append(loss.item())
         pbar.desc = f"Epoch [{epoch}] Loss: {np.mean(losses)}"
     return np.mean(losses)
 
@@ -72,39 +73,38 @@ def train_srgan(gen_net: SRGAN, dis_net: Discriminator, dataloader, content_loss
     pbar = tqdm(dataloader, total=len(dataloader))
     for idx, (hr_images, lr_images) in enumerate(pbar):
         hr_images, lr_images = hr_images.to(device), lr_images.to(device)
-        with autocast(device_type=device.type,
-                      enabled=device.type == 'cuda'):
-            sr_images = gen_net(lr_images)
-            sr_discriminated = dis_net(sr_images)
-            loss, cont_loss, adversarial_loss = content_loss(sr_images, hr_images, sr_discriminated)
-        optimizer_g.zero_grad()
-        gradscaler.scale(loss).backward()
-        gradscaler.unscale_(optimizer_g)
-        clip_grad_norm_(gen_net.parameters(), 10)
-        gradscaler.step(optimizer_g)
-        gradscaler.update()
-        loss_g.append(loss.item())
+        for x in range(10):
+            with autocast(device_type=device.type,
+                          enabled=device.type == 'cuda'):
+                sr_images = gen_net(lr_images)
+                sr_discriminated = dis_net(sr_images)
+                loss, adversarial_loss = content_loss(sr_images, hr_images, sr_discriminated)
+            optimizer_g.zero_grad()
+            gradscaler.scale(loss).backward()
+            gradscaler.unscale_(optimizer_g)
+            clip_grad_norm_(gen_net.parameters(), 10)
+            gradscaler.step(optimizer_g)
+            gradscaler.update()
+            loss_g.append(loss.item())
 
-        with autocast(device_type=device.type,
-                      enabled=device.type == 'cuda'):
-            sr_discriminated = dis_net(sr_images.detach())
-            hr_discriminated = dis_net(hr_images)
-            loss = adv_loss(sr_discriminated, hr_discriminated)
+            with autocast(device_type=device.type,
+                          enabled=device.type == 'cuda'):
+                sr_discriminated = dis_net(sr_images.detach())
+                hr_discriminated = dis_net(hr_images)
+                loss = adv_loss(sr_discriminated, hr_discriminated)
 
-        optimizer_d.zero_grad()
-        gradscaler.scale(loss).backward()
-        gradscaler.unscale_(optimizer_d)
-        clip_grad_norm_(dis_net.parameters(), 10)
-        gradscaler.step(optimizer_d)
-        gradscaler.update()
-        loss_d.append(loss.item())
-        loss_content.append(cont_loss.item())
-        loss_adv.append(adversarial_loss.item())
+            optimizer_d.zero_grad()
+            gradscaler.scale(loss).backward()
+            gradscaler.unscale_(optimizer_d)
+            clip_grad_norm_(dis_net.parameters(), 10)
+            gradscaler.step(optimizer_d)
+            gradscaler.update()
+            loss_d.append(loss.item())
+            loss_adv.append(adversarial_loss.item())
 
-        pbar.desc = (f"Epoch [{epoch}] Loss gen: {np.mean(loss_g)}, Loss dis: {np.mean(loss_d)}, "
-                     f"Content: {np.mean(loss_content)}, Adv: {np.mean(loss_adv)}")
+        pbar.desc = (f"Epoch [{epoch}] Loss gen: {np.mean(loss_g)}, Loss dis: {np.mean(loss_d)}, Adv: {np.mean(loss_adv)}")
 
-    return 0
+    return np.mean(loss_g)
 
 
 if __name__ == '__main__':
@@ -120,7 +120,7 @@ if __name__ == '__main__':
     parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--dml", action="store_true")
     parser.add_argument("--mean", action="store_true")
-
+    parser.add_argument("--resume", action="store_true")
 
     opt = parser.parse_args()
     json_file = Path("./train_images.json")
@@ -134,6 +134,7 @@ if __name__ == '__main__':
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if opt.dml:
         import torch_directml
+
         device = torch_directml.device(0)
     else:
         device = torch.device(device)
@@ -203,23 +204,25 @@ if __name__ == '__main__':
             n_P = sum([x.numel() for x in model.parameters()])
             n_g = sum(x.numel() for x in model.parameters() if x.requires_grad)  # number gradients
             print(f"{prefix} {epochs} epochs, {n_P:,} parameters, {n_g:,} gradients")
-            if res_checkpoints.is_file():
-                ckpt = torch.load(res_checkpoints.as_posix(), 'cpu')
-                checkpoint_state = intersect_dicts(ckpt['gen_net'], model.state_dict())
-                model.load_state_dict(checkpoint_state, strict=False)
-                if len(checkpoint_state) == len(model.state_dict()):
-                    optimizer.load_state_dict(ckpt['optimizer'])
-                    start_epoch = ckpt['epoch'] + 1
-                optimizer_to(optimizer, device)
-                print(f"Loaded pre-trained {len(checkpoint_state)}/{len(model.state_dict())} model")
-                del ckpt
+            if opt.resume:
+                if res_checkpoints.is_file():
+                    ckpt = torch.load(res_checkpoints.as_posix(), 'cpu')
+                    checkpoint_state = intersect_dicts(ckpt['gen_net'], model.state_dict())
+                    model.load_state_dict(checkpoint_state, strict=False)
+                    if len(checkpoint_state) == len(model.state_dict()):
+                        optimizer.load_state_dict(ckpt['optimizer'])
+                        start_epoch = ckpt['epoch'] + 1
+                    optimizer_to(optimizer, device)
+                    print(f"Loaded pre-trained {len(checkpoint_state)}/{len(model.state_dict())} model")
+                    del ckpt
 
-            for epoch in range(start_epoch, epochs):
-                train(model, dataloader, compute_loss, optimizer, scaler, epoch)
-                schedule.step()
-                torch.save({"gen_net": model.state_dict(), "optimizer": optimizer.state_dict(),
-                            "epoch": epoch, "mean": dataset.mean, "std": dataset.std},
-                           res_checkpoints.as_posix())
+                for epoch in range(start_epoch, epochs):
+                    loss = train(model, dataloader, compute_loss, optimizer, scaler, epoch)
+                    schedule.step()
+                    torch.save({"gen_net": model.state_dict(), "optimizer": optimizer.state_dict(),
+                                "epoch": epoch, "mean": dataset.mean, "std": dataset.std, "loss": loss},
+                               res_checkpoints.as_posix())
+
 
         else:
             gen_net = SRGAN(ResNet(16))
@@ -243,20 +246,24 @@ if __name__ == '__main__':
             print(f"{prefix} {epochs} epochs, gen {n_P:,} parameters, dis {n_g:,} parameters")
 
             start_epoch = 0
-            if gen_checkpoints.is_file():
-                print(f"Train: load state dict from {gen_checkpoints.as_posix()}")
-                ckpt = torch.load(gen_checkpoints.as_posix(), "cpu")
-                gen_net.load_state_dict(ckpt['gen_net'])
-                dis_net.load_state_dict(ckpt["dis_net"])
-                optimizer_g.load_state_dict(ckpt['optimizer_g'])
-                optimizer_d.load_state_dict(ckpt['optimizer_d'])
-                start_epoch = ckpt['epoch'] + 1
-                optimizer_to(optimizer_g, device)
-                optimizer_to(optimizer_d, device)
-                del ckpt
+            gen_net.net.load_state_dict(torch.load(res_checkpoints, "cpu")['gen_net'])
+            if opt.resume:
+                if gen_checkpoints.is_file():
+                    print(f"Train: load state dict from {gen_checkpoints.as_posix()}")
+                    ckpt = torch.load(gen_checkpoints.as_posix(), "cpu")
+                    gen_net.load_state_dict(ckpt['gen_net'])
+                    dis_net.load_state_dict(ckpt["dis_net"])
+                    optimizer_g.load_state_dict(ckpt['optimizer_g'])
+                    optimizer_d.load_state_dict(ckpt['optimizer_d'])
+                    start_epoch = ckpt['epoch'] + 1
+                    optimizer_to(optimizer_g, device)
+                    optimizer_to(optimizer_d, device)
+                    del ckpt
+                else:
+                    if res_checkpoints.is_file():
+                        gen_net.net.load_state_dict(torch.load(res_checkpoints, "cpu")['gen_net'])
             else:
-                if res_checkpoints.is_file():
-                    gen_net.net.load_state_dict(torch.load(res_checkpoints, "cpu")['gen_net'])
+                gen_net.net.load_state_dict(torch.load(res_checkpoints, "cpu")['gen_net'])
 
             adv_loss_compute = Adversarial()
             content_loss_compute = Content_Loss(device=device, Bce=adv_loss_compute)
@@ -269,14 +276,14 @@ if __name__ == '__main__':
             best_fitness = 1000
 
             for x in range(start_epoch, epochs):
-                train_srgan(gen_net, dis_net, dataloader, content_loss_compute, adv_loss_compute,
-                            optimizer_g, optimizer_d, scaler, x)
+                loss = train_srgan(gen_net, dis_net, dataloader, content_loss_compute, adv_loss_compute,
+                                   optimizer_g, optimizer_d, scaler, x)
                 schedule_g.step()
                 schedule_d.step()
                 torch.save({'gen_net': gen_net.state_dict(),
                             "dis_net": dis_net.state_dict(),
                             "optimizer_g": optimizer_g.state_dict(),
                             "optimizer_d": optimizer_d.state_dict(),
-                            "mean": dataset.mean, "std": dataset.std,
+                            "mean": dataset.mean, "std": dataset.std, "loss": loss,
                             "epoch": x},
                            gen_checkpoints.as_posix())

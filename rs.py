@@ -58,7 +58,7 @@ def runer(**kwargs):
         dataloader, dataset = init_dataloader_for_inference(src, worker, batch_size=batch_size)
         pbar = tqdm(dataloader, total=len(dataloader))
         for idx, frames in enumerate(pbar):
-            frames = frames.to(device)
+            frames = frames.to(device).float()
             with autocast(device_type=device.type, enabled=device.type == 'cuda'):
                 frames = norm_(frames)
                 sr = model(frames)
@@ -109,9 +109,9 @@ def runer(**kwargs):
                 if width >= image_width:
                     high += h
                     width = 0
-
-        write_png(result_image, result_dir.with_suffix(".png").as_posix())
-        print("output shape", result_image.shape)
+        result_dir = result_dir.with_suffix(".png")
+        write_png(result_image, result_dir.as_posix())
+        print("output shape", result_image.shape, f"{result_dir.as_posix()}")
 
 
 if __name__ == "__main__":

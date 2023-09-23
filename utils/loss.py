@@ -6,7 +6,6 @@ from utils.models import ConvertTanh2Norm, TruncatedVGG19
 class Content_Loss:
     def __init__(self,Bce, vgg_i=5, vgg_j=4, beta=1e-3, device='cuda'):
         self.vgg_net = TruncatedVGG19(vgg_i, vgg_j).eval().to(device)
-
         self.content_loss_compute = nn.MSELoss()
         self.adversarial_loss_compute = Bce
         self.beta = beta
@@ -19,7 +18,7 @@ class Content_Loss:
         adversarial_loss = self.adversarial_loss_compute(sr_discriminated,
                                                          torch.ones_like(sr_discriminated))
         perceptual_loss = content_loss + self.beta * adversarial_loss
-        return perceptual_loss, content_loss, adversarial_loss
+        return perceptual_loss, adversarial_loss
 
 
 class Adversarial:

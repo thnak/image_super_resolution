@@ -36,15 +36,13 @@ class Conv(nn.Module):
 class ResidualBlock1(nn.Module):
     def __init__(self, in_channel: int, out_channel: int, hidden_channel: int, kernel: any, act: any):
         super(ResidualBlock1, self).__init__()
-        act = fix_problem_with_reuse_activation_funtion(act)
         self.m = nn.Sequential(
             Conv(in_channel, hidden_channel, 1, 1, None, act=act),
             Conv(hidden_channel, hidden_channel, kernel, 1, None, act=act),
             Conv(hidden_channel, out_channel, 1, 1, None, act=False))
-        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, inputs: torch.Tensor):
-        return self.act(inputs + self.m(inputs))
+        return inputs + self.m(inputs)
 
 
 class ResidualBlock2(nn.Module):
@@ -69,10 +67,9 @@ class ResidualBlock3(nn.Module):
             Conv(in_channel, hidden_channel, 1, 1, None, act=act),
             Inception(hidden_channel, hidden_channel, act),
             Conv(hidden_channel, out_channel, 1, 1, None, act=False))
-        self.act = nn.Identity()
 
     def forward(self, inputs: torch.Tensor):
-        return self.act(inputs + self.m(inputs))
+        return inputs + self.m(inputs)
 
 
 class RDB(nn.Module):
@@ -80,15 +77,11 @@ class RDB(nn.Module):
 
     def __init__(self, filter, act):
         super().__init__()
-        self.conv0 = nn.Sequential(nn.Conv2d(filter, filter, 1, 1, 0),
-                                   fix_problem_with_reuse_activation_funtion(act))
-        self.conv1 = nn.Sequential(nn.Conv2d(filter, filter, 3, 1, 1),
-                                   fix_problem_with_reuse_activation_funtion(act))
-        self.conv2 = nn.Sequential(nn.Conv2d(filter, filter, 3, 1, 1),
-                                   fix_problem_with_reuse_activation_funtion(act))
-        self.conv3 = nn.Sequential(nn.Conv2d(filter, filter, 3, 1, 1),
-                                   fix_problem_with_reuse_activation_funtion(act))
-        self.conv = Conv(filter, filter, 1, 1, 0)
+        self.conv0 = Conv(filter, filter, 3, 1, None, act=act)
+        self.conv1 = Conv(filter, filter, 3, 1, None, act=act)
+        self.conv2 = Conv(filter, filter, 3, 1, None, act=act)
+        self.conv3 = Conv(filter, filter, 3, 1, None, act=act)
+        self.conv = Conv(filter, filter, 1, 1, 0, act=False)
 
     def forward(self, inputs):
         output0 = self.conv0(inputs) + inputs
@@ -135,19 +128,17 @@ class Inception(nn.Module):
     def __init__(self, in_channel, out_channel, act=any):
         super().__init__()
         assert out_channel >= 4, f"Inception node must have output channels >= 4, got {out_channel}"
+        self.conv1 = Conv(in_channel, out_channel // 4, 1, 1, act=False)
+        conv2_1 = Conv(in_channel, out_channel // 4, 1, 1, act=act)
+        conv2_2 = Conv(out_channel // 4, out_channel // 4, 5, 1, act=False)
+        self.conv2 = nn.Sequential(conv2_1, conv2_2)
 
-        self.conv1 = Conv(in_channel, out_channel, 1, 1, act=False)
-        conv2_1 = Conv(in_channel, out_channel, 1, 1, act=act)
-        conv2_2_1 = Conv(out_channel, out_channel, 5, 1, act=False)
-        self.conv2 = nn.Sequential(conv2_1, conv2_2_1)
-
-        conv3_1 = Conv(in_channel, out_channel, 1, 1, act=act)
-        conv3_2_1 = Conv(out_channel, out_channel, 7, 1, act=False)
-
-        self.conv3 = nn.Sequential(conv3_1, conv3_2_1)
+        conv3_1 = Conv(in_channel, out_channel // 4, 1, 1, act=act)
+        conv3_2 = Conv(out_channel // 4, out_channel // 4, 7, 1, act=False)
+        self.conv3 = nn.Sequential(conv3_1, conv3_2)
 
         self.conv4 = nn.Sequential(nn.MaxPool2d(3, stride=1, padding=1),
-                                   Conv(in_channel, out_channel, 1, 1, act=False))
+                                   Conv(in_channel, out_channel // 4, 1, 1, act=False))
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, inputs):
@@ -155,7 +146,7 @@ class Inception(nn.Module):
         feed_1 = self.conv2(inputs)
         feed_2 = self.conv3(inputs)
         feed_3 = self.conv4(inputs)
-        return self.act(feed_0 + feed_1 + feed_2 + feed_3)
+        return self.act(torch.cat([feed_0, feed_1, feed_2, feed_3], dim=1))
 
 
 def fuse_conv_and_bn(conv, bn):
@@ -373,13 +364,13 @@ class ResNet(nn.Module):
         self.conv0 = nn.Sequential(Conv(3, 64, 9, act=False))
         residual = [RRDB(64, 64,
                          128, 3,
-                         act=nn.LeakyReLU()) for x in range(num_block_resnet)]
+                         act=nn.PReLU()) for x in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
         self.scaler = nn.Sequential(*[Scaler(64, 64,
                                              2, 3,
-                                             nn.LeakyReLU()) for x in range(2)])
+                                             nn.PReLU()) for x in range(2)])
         self.conv2 = nn.Sequential(Conv(64, 3, 9, 1, act=nn.Tanh()))
 
     def forward(self, inputs: torch.Tensor):
@@ -442,28 +433,6 @@ def sliding_window(image: torch.Tensor, step: int | list[int, int] | tuple[int, 
             yield step, x, y, image[..., y:y + windowSize, x:x + windowSize]
 
 
-class WindowSlide(nn.Module):
-    def __init__(self, scaleFactor, model):
-        super().__init__()
-        self.scaleFactor = scaleFactor
-        self.net = model
-
-    def forward(self, inputs):
-        b, c, h, w = inputs.size()
-        results = torch.zeros([b, c, h * self.scaleFactor, w * self.scaleFactor], dtype=inputs.dtype)
-        start_row = start_col = 0
-        for _, _, _, window in sliding_window(inputs, 96):
-            window = self.net(window)
-            _, _, win_h, win_w = window.size()
-
-            results = results[..., start_col:start_col + win_h, start_row:start_row + win_w]
-            start_row += win_w
-            if start_row >= results.size(-2):
-                start_row = 0
-                start_col += win_h
-        return results
-
-
 class Model(nn.Module):
     mean = None
     std = None
@@ -503,14 +472,15 @@ if __name__ == '__main__':
         torch.jit.enable_onednn_fusion(True)
     model = Model(ResNet(16))
 
-    # ckpt = torch.load("../gen_checkpoint.pt", "cpu")
-    # model.net.load_state_dict(ckpt['gen_net'])
-    # model.init_normalize(ckpt['mean'], ckpt['std'])
+    ckpt = torch.load("../gen_checkpoint.pt", "cpu")
+    model.net.load_state_dict(ckpt['gen_net'])
+    model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False
     model.eval().fuse()
     try:
         import torch_directml
+
         device = torch_directml.device(0)
     except Exception as ex:
         device = torch.device(0) if torch.cuda.is_available() else "cpu"
@@ -529,15 +499,15 @@ if __name__ == '__main__':
     for x in range(1):
         model(feed)
     print(f"times: {perf_counter() - t0}")
-    # jit_m = torch.jit.trace(model, feed)
-    # torch.jit.save(jit_m, "model.pt")
-    # axe = {'images': {2: "x", 3: "x"}, "outputs": {}}
-    # torch.onnx.export(model, feed, "model.onnx", dynamic_axes=axe,
-    #                   input_names=["images"], output_names=["outputs"])
-    # import onnx
-    # from onnxsim import simplify
-    #
-    # onnx_model = onnx.load('model.onnx')
-    # onnx_model, c = simplify(onnx_model)
-    # onnx.save(onnx_model, "model.onnx")
-    # print(feed.shape)
+    jit_m = torch.jit.trace(model, feed)
+    torch.jit.save(jit_m, "model.pt")
+    axe = {'images': {2: "x", 3: "x"}, "outputs": {}}
+    torch.onnx.export(model, feed, "model.onnx", dynamic_axes=axe,
+                      input_names=["images"], output_names=["outputs"])
+    import onnx
+    from onnxsim import simplify
+
+    onnx_model = onnx.load('model.onnx')
+    onnx_model, c = simplify(onnx_model)
+    onnx.save(onnx_model, "model.onnx")
+    print(feed.shape)

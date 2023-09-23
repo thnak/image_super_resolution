@@ -73,9 +73,10 @@ def create_data_lists(train_folders, test_folders, min_size, output_folder="./")
                     try:
                         image.verify()
                         image.close()
+                        train_images.append(i.as_posix())
+
                     except:
                         continue
-                    train_images.append(i.as_posix())
 
     print("There are %d images in the training data.\n" % len(train_images))
     save_dir = Path(output_folder)

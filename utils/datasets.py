@@ -16,8 +16,6 @@ from utils.general import ground_up, convert_image_to_jpg
 
 
 class Random_low_rs(Module):
-    BILINEAR = InterpolationMode.BILINEAR
-    BICUBIC = InterpolationMode.BICUBIC
 
     def __init__(self, input_shape, scale_factor):
         super(Random_low_rs, self).__init__()
@@ -25,14 +23,7 @@ class Random_low_rs(Module):
         self.input_shape = input_shape
 
     def forward(self, inputs):
-        size = int(self.input_shape / self.scale_factor)
-        random_value = random.random()
-        if random_value < 1 / 3:
-            inputs = inputs[:, ::self.scale_factor, ::self.scale_factor]
-        else:
-            inputs = T.resize(inputs, [size, size],
-                              self.BILINEAR if random_value < 2 / 3 else self.BICUBIC,
-                              antialias=False)
+        inputs = inputs[:, ::self.scale_factor, ::self.scale_factor]
         return inputs
 
 
@@ -101,8 +92,7 @@ class PIL_to_tanh(Module):
         self.register_buffer("max_pixel_value", torch.tensor(max_pixel_value))
 
     def forward(self, inputs):
-        if inputs.dtype == torch.uint8:
-            inputs = inputs.float()
+        inputs = inputs.to(dtype=self.max_pixel_value.dtype)
         inputs /= self.max_pixel_value
         return 2. * inputs - 1
 
@@ -218,7 +208,7 @@ class SR_dataset(Dataset):
         print(f"{prefix}{len(self.samples)} images with target shape {target_size} with scale factor {scales_factor}.")
         self.target_size = target_size
         self.scale_factor = scales_factor
-        self.crop = Random_position(target_size=target_size)
+        self.ran_position = Random_position(target_size=target_size)
         if calculateNorm:
             self.calculateNormValues()
         self.transform_lr = Compose([Random_low_rs(target_size, scales_factor),
@@ -272,10 +262,12 @@ class SR_dataset(Dataset):
         try:
             image = read_image(self.samples[item], ImageReadMode.RGB)  # CHW
         except Exception as ex:
-            self.samples[item] = convert_image_to_jpg(self.samples[item])
-            image = read_image(self.samples[item], ImageReadMode.RGB)  # CHW
+            print(f"error {ex}")
+            converted_image = convert_image_to_jpg(self.samples[item]).as_posix()
+            self.samples[item] = converted_image
+            image = read_image(converted_image, ImageReadMode.RGB)  # CHW
 
-        image = self.crop(image)
+        image = self.ran_position(image)
         return self.transform_hr(image), self.transform_lr(image)
 
     def __len__(self):
@@ -286,28 +278,20 @@ class Noisy_dataset(Dataset):
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
 
-    def __init__(self, json_path, target_size, mean=None, std=None, prefix=""):
-        if mean is not None:
-            self.mean = mean
-        if std is not None:
-            self.std = std
+    def __init__(self, json_path, target_size, prefix=""):
         self.prefix = prefix
         json_path = json_path if isinstance(json_path, Path) else Path(json_path)
         with open(json_path.as_posix(), "r") as fi:
             self.samples = json.load(fi)
 
-        if sum(self.mean) == 0 and sum(self.std) == 3:
-            if self.calculateMeanSTD() > 0:
-                with open(json_path.as_posix(), 'w') as fo:
-                    fo.write(json.dumps(self.samples))
         self.target_size = target_size
-        self.crop = Random_position(target_size=target_size)
+        self.ran_position = Random_position(target_size=target_size)
         self.transform_lr = Compose([RandomNoisyImage(), Normalize(self.mean, self.std)])
         self.transform_hr = PIL_to_tanh()
 
     def __getitem__(self, item):
         image = read_image(self.samples[item], ImageReadMode.RGB)  # CHW
-        image = self.crop(image)
+        image = self.ran_position(image)
         return self.transform_hr(image), self.transform_lr(image)
 
     def __len__(self):
