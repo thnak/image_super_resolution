@@ -12,7 +12,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch.optim import Adam, SGD
 from torch.optim.lr_scheduler import LambdaLR, LinearLR
 from tqdm import tqdm
-from utils.models import ResNet, SRGAN, Discriminator, Model, Denoise
+from utils.models import ResNet, SRGAN, Discriminator, Denoise
 from utils.general import intersect_dicts
 from utils.datasets import SR_dataset, init_dataloader, Noisy_dataset
 from utils.loss import Content_Loss, Adversarial
@@ -41,7 +41,7 @@ def train(model: any, dataloader, compute_loss: MSELoss, optimizer: any, gradsca
     pbar = tqdm(dataloader, total=len(dataloader))
     for idx, (hr_images, lr_images) in enumerate(pbar):
         hr_images, lr_images = hr_images.to(device), lr_images.to(device)
-        for _ in range(10):
+        for _ in range(1):
             optimizer.zero_grad()
             with autocast(device_type=device.type if device.type == 'cuda' else 'cpu',
                           enabled=device.type == 'cuda'):
@@ -73,12 +73,12 @@ def train_srgan(gen_net: SRGAN, dis_net: Discriminator, dataloader, content_loss
     pbar = tqdm(dataloader, total=len(dataloader))
     for idx, (hr_images, lr_images) in enumerate(pbar):
         hr_images, lr_images = hr_images.to(device), lr_images.to(device)
-        for x in range(10):
+        for x in range(1):
             with autocast(device_type=device.type,
                           enabled=device.type == 'cuda'):
                 sr_images = gen_net(lr_images)
                 sr_discriminated = dis_net(sr_images)
-                loss, adversarial_loss = content_loss(sr_images, hr_images, sr_discriminated)
+                loss, adversarial_loss = content_loss(sr_images, hr_images, sr_discriminated, adv_loss)
             optimizer_g.zero_grad()
             gradscaler.scale(loss).backward()
             gradscaler.unscale_(optimizer_g)
@@ -102,7 +102,8 @@ def train_srgan(gen_net: SRGAN, dis_net: Discriminator, dataloader, content_loss
             loss_d.append(loss.item())
             loss_adv.append(adversarial_loss.item())
 
-        pbar.desc = (f"Epoch [{epoch}] Loss gen: {np.mean(loss_g)}, Loss dis: {np.mean(loss_d)}, Adv: {np.mean(loss_adv)}")
+        pbar.desc = (
+            f"Epoch [{epoch}] Loss gen: {np.mean(loss_g)}, Loss dis: {np.mean(loss_d)}, Adv: {np.mean(loss_adv)}")
 
     return np.mean(loss_g)
 
@@ -170,7 +171,6 @@ if __name__ == '__main__':
             del ckpt
 
         dataset = Noisy_dataset(json_path=json_file.as_posix(), target_size=96,
-                                mean=data_mean, std=data_std,
                                 prefix="Train: ")
         dataloader = init_dataloader(dataset, batch_size=batch_size, num_worker=workers, shuffle=True)[0]
         compute_loss = nn.MSELoss()
@@ -192,13 +192,12 @@ if __name__ == '__main__':
         dataloader = init_dataloader(dataset, batch_size=batch_size, num_worker=workers)[0]
         prefix = "Train: "
         if opt.resnet:
-            model = ResNet(16)
+            model = ResNet(14)
             compute_loss = nn.MSELoss()
             optimizer = torch.optim.SGD(params=model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
-            schedule = LinearLR(optimizer, start_factor=1, end_factor=0.1,
-                                total_iters=int((epochs / 2) // len(dataloader) + 1))
-            epochs = int(epochs // len(dataloader) + 1)
 
+            schedule = LinearLR(optimizer, start_factor=1, end_factor=0.01,
+                                total_iters=epochs)
             start_epoch = 0
             model.to(device)
             n_P = sum([x.numel() for x in model.parameters()])
@@ -216,13 +215,12 @@ if __name__ == '__main__':
                     print(f"Loaded pre-trained {len(checkpoint_state)}/{len(model.state_dict())} model")
                     del ckpt
 
-                for epoch in range(start_epoch, epochs):
+            for epoch in range(start_epoch, epochs):
                     loss = train(model, dataloader, compute_loss, optimizer, scaler, epoch)
                     schedule.step()
                     torch.save({"gen_net": model.state_dict(), "optimizer": optimizer.state_dict(),
                                 "epoch": epoch, "mean": dataset.mean, "std": dataset.std, "loss": loss},
                                res_checkpoints.as_posix())
-
 
         else:
             gen_net = SRGAN(ResNet(16))
@@ -235,12 +233,10 @@ if __name__ == '__main__':
                                           momentum=momentum, weight_decay=weight_decay)
             optimizer_d = torch.optim.SGD(params=dis_net.parameters(), lr=lr,
                                           momentum=momentum, weight_decay=weight_decay)
-            schedule_g = LinearLR(optimizer_g, start_factor=1, end_factor=0.1,
-                                  total_iters=int((epochs / 2) // len(dataloader) + 1))
-            schedule_d = LinearLR(optimizer_d, start_factor=1, end_factor=0.1,
-                                  total_iters=int((epochs / 2) // len(dataloader) + 1))
-
-            epochs = int(epochs // len(dataloader) + 1)
+            schedule_g = LinearLR(optimizer_g, start_factor=1, end_factor=0.01,
+                                  total_iters=epochs)
+            schedule_d = LinearLR(optimizer_d, start_factor=1, end_factor=0.01,
+                                  total_iters=epochs)
             n_P = sum([x.numel() for x in gen_net.parameters()])
             n_g = sum(x.numel() for x in dis_net.parameters())  # number gradients
             print(f"{prefix} {epochs} epochs, gen {n_P:,} parameters, dis {n_g:,} parameters")
@@ -266,7 +262,7 @@ if __name__ == '__main__':
                 gen_net.net.load_state_dict(torch.load(res_checkpoints, "cpu")['gen_net'])
 
             adv_loss_compute = Adversarial()
-            content_loss_compute = Content_Loss(device=device, Bce=adv_loss_compute)
+            content_loss_compute = Content_Loss(device=device)
             gen_net.to(device)
             dis_net.to(device)
             n_P = sum([x.numel() for x in gen_net.parameters()])

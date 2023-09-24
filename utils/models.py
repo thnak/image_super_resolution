@@ -10,15 +10,36 @@ from utils.general import fix_problem_with_reuse_activation_funtion, ACT_LIST, a
 from utils.datasets import Normalize
 
 
+class FullyConnected(nn.Module):
+    def __init__(self, in_channel: int, out_channel: int, act=False):
+        """Linear + BatchNorm + Act
+        act = False -> nn.Identity() otherwise nn.Act"""
+        super().__init__()
+        act = fix_problem_with_reuse_activation_funtion(act)
+        if isinstance(act, nn.PReLU):
+            act = nn.PReLU(out_channel)
+        self.linear = nn.Linear(in_channel, out_channel, bias=False)
+        self.bn = nn.BatchNorm1d(out_channel)
+        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
+
+    def forward(self, inputs: torch.Tensor):
+        return self.act(self.bn(self.linear(inputs)))
+
+    def fuseforward(self, inputs):
+        return self.act(self.linear(inputs))
+
+
 class Conv(nn.Module):
     """Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation, dropout"""
 
-    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act: any = True, dropout=0.):
+    def __init__(self, c1, c2, k: any = 1, s: any = 1, p=None, g=1, d=1, act: any = True, dropout=0.):
         super(Conv, self).__init__()
         if isinstance(d, ACT_LIST):  # Try to be compatible with models from other repo
             act = d
             d = 1
         act = fix_problem_with_reuse_activation_funtion(act)
+        if isinstance(act, nn.PReLU):
+            act = nn.PReLU(c2)
         assert 0 <= dropout <= 1, f"dropout rate must be 0 <= dropout <= 1, your {dropout}"
         pad = autopad(k, p, d) if isinstance(k, int) else [autopad(k[0], p, d), autopad(k[1], p, d)]
         self.conv = nn.Conv2d(c1, c2, k, s, pad, groups=g, dilation=d, bias=False)
@@ -28,6 +49,30 @@ class Conv(nn.Module):
 
     def forward(self, x):
         return self.drop(self.act(self.bn(self.conv(x))))
+
+    def fuseforward(self, x):
+        return self.act(self.conv(x))
+
+
+class ConvWithoutBN(nn.Module):
+    """Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation, dropout"""
+
+    def __init__(self, c1, c2, k: any = 1, s: any = 1, p=None, g=1, d=1, act: any = True, dropout=0.):
+        super().__init__()
+        if isinstance(d, ACT_LIST):  # Try to be compatible with models from other repo
+            act = d
+            d = 1
+        act = fix_problem_with_reuse_activation_funtion(act)
+        if isinstance(act, nn.PReLU):
+            act = nn.PReLU(c2)
+        assert 0 <= dropout <= 1, f"dropout rate must be 0 <= dropout <= 1, your {dropout}"
+        pad = autopad(k, p, d) if isinstance(k, int) else [autopad(k[0], p, d), autopad(k[1], p, d)]
+        self.conv = nn.Conv2d(c1, c2, k, s, pad, groups=g, dilation=d, bias=True)
+        self.drop = nn.Dropout(p=dropout) if dropout > 0. else nn.Identity()
+        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
+
+    def forward(self, x):
+        return self.drop(self.act(self.conv(x)))
 
     def fuseforward(self, x):
         return self.act(self.conv(x))
@@ -48,11 +93,11 @@ class ResidualBlock1(nn.Module):
 class ResidualBlock2(nn.Module):
     def __init__(self, in_channel: int, out_channel: int, hidden_channel: int, kernel: any, act: any):
         super(ResidualBlock2, self).__init__()
-        act = fix_problem_with_reuse_activation_funtion(act)
         self.m = nn.Sequential(Conv(in_channel, hidden_channel, 1, 1, None, act=act),
                                Conv(hidden_channel, hidden_channel, kernel, 1, None, act=act),
                                Conv(hidden_channel, out_channel, 1, 1, None, act=False))
         self.m1 = Conv(in_channel, out_channel, 1, 1, None, act=False)
+        act = fix_problem_with_reuse_activation_funtion(act)
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, inputs: torch.Tensor):
@@ -75,35 +120,36 @@ class ResidualBlock3(nn.Module):
 class RDB(nn.Module):
     """Residual Dense Block"""
 
-    def __init__(self, filter, act):
+    def __init__(self, filter, out_channel, act):
         super().__init__()
-        self.conv0 = Conv(filter, filter, 3, 1, None, act=act)
-        self.conv1 = Conv(filter, filter, 3, 1, None, act=act)
-        self.conv2 = Conv(filter, filter, 3, 1, None, act=act)
-        self.conv3 = Conv(filter, filter, 3, 1, None, act=act)
-        self.conv = Conv(filter, filter, 1, 1, 0, act=False)
+        self.conv0 = Conv(filter + filter * 0, filter, 3, 1, None, act=act)
+        self.conv1 = Conv(filter + filter * 1, filter, 3, 1, None, act=act)
+        self.conv2 = Conv(filter + filter * 2, filter, 3, 1, None, act=act)
+        self.conv3 = Conv(filter + filter * 3, filter, 3, 1, None, act=act)
+        self.conv = Conv(filter + filter * 4, out_channel, 3, 1, None, act=False)
 
     def forward(self, inputs):
-        output0 = self.conv0(inputs) + inputs
-        output1 = self.conv1(output0) + output0 + inputs
-        output2 = self.conv2(output1) + output0 + output1 + inputs
-        output3 = self.conv3(output2) + output0 + output1 + output2 + inputs
-        return self.conv(inputs + output0 + output1 + output2 + output3)
+        output0 = self.conv0(inputs)
+        output1 = self.conv1(torch.cat([inputs, output0], 1))
+        output2 = self.conv2(torch.cat([inputs, output0, output1], 1))
+        output3 = self.conv3(torch.cat([inputs, output0, output1, output2], 1))
+        output3 = self.conv(torch.cat([inputs, output0, output1, output2, output3], 1))
+        return output3 * 0.2 + inputs
 
 
 class RRDB(nn.Module):
     """Residual in Residual Dense Block"""
 
-    def __init__(self, in_channel: int, out_channel: int, hidden_channel: int, kernel: any, act: any, *args, **kwargs):
+    def __init__(self, in_channel: int, out_channel: int, hidden_channel: int, kernel: any, act: any):
         super().__init__()
-        act = fix_problem_with_reuse_activation_funtion(act)
         self.m = nn.Sequential(Conv(in_channel, hidden_channel, kernel, 1, None, act=act),
-                               RDB(hidden_channel, act),
-                               fix_problem_with_reuse_activation_funtion(act),
-                               Conv(hidden_channel, out_channel, kernel, 1, None, act=False))
+                               RDB(hidden_channel, hidden_channel, nn.PReLU(hidden_channel)),
+                               RDB(hidden_channel, hidden_channel, nn.PReLU(hidden_channel)),
+                               RDB(hidden_channel, hidden_channel, nn.PReLU(hidden_channel)),
+                               Conv(hidden_channel, out_channel, kernel, 1, None, act=act))
 
     def forward(self, inputs: torch.Tensor):
-        return inputs + self.m(inputs)
+        return inputs + self.m(inputs) * 0.2
 
 
 class elan(nn.Module):
@@ -317,7 +363,7 @@ class Discriminator(nn.Module):
         for i in range(n_blocks):
             out_channels = (n_channels if i == 0 else in_channels * 2) if i % 2 == 0 else in_channels
             conv_blocks.append(Conv(in_channels, out_channels, kernel_size, 1 if i % 2 == 0 else 2, None,
-                                    act=nn.PReLU()))
+                                    act=nn.PReLU(out_channels)))
             in_channels = out_channels
         self.conv_blocks = nn.Sequential(*conv_blocks)
 
@@ -325,7 +371,7 @@ class Discriminator(nn.Module):
         # For the default input size of 96 and 8 convolutional blocks, this will have no effect
         self.adaptive_pool = nn.AdaptiveAvgPool2d((6, 6))
         self.fc1 = nn.Linear(out_channels * 6 * 6, fc_size)
-        self.leaky_relu = nn.PReLU()
+        self.fc1 = FullyConnected(out_channels * 6 * 6, fc_size, act=nn.PReLU(fc_size))
         self.fc2 = nn.Linear(fc_size, 1)
 
     def forward(self, inputs):
@@ -340,7 +386,6 @@ class Discriminator(nn.Module):
         output = self.conv_blocks(inputs)
         output = self.adaptive_pool(output)
         output = self.fc1(output.view(batch_size, -1))
-        output = self.leaky_relu(output)
         return self.fc2(output)
 
 
@@ -348,7 +393,12 @@ class Scaler(nn.Module):
     def __init__(self, in_channel, out_channel, scale_factor, kernel_size, act):
         super().__init__()
         act = fix_problem_with_reuse_activation_funtion(act)
-        scaler = [Conv(in_channel, out_channel * (scale_factor ** 2), kernel_size, 1, None, act=False),
+        out_channel = out_channel * (scale_factor ** 2)
+        if isinstance(act, nn.PReLU):
+            num_parameters = act.num_parameters
+            if num_parameters != 1:
+                act = nn.PReLU(out_channel // (scale_factor * 2))
+        scaler = [Conv(in_channel, out_channel, kernel_size, 1, None, act=False),
                   nn.PixelShuffle(scale_factor), act]
 
         self.net = nn.Sequential(*scaler)
@@ -363,14 +413,14 @@ class ResNet(nn.Module):
 
         self.conv0 = nn.Sequential(Conv(3, 64, 9, act=False))
         residual = [RRDB(64, 64,
-                         128, 3,
-                         act=nn.PReLU()) for x in range(num_block_resnet)]
+                         72, 3,
+                         act=nn.PReLU(64)) for x in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
         self.scaler = nn.Sequential(*[Scaler(64, 64,
                                              2, 3,
-                                             nn.PReLU()) for x in range(2)])
+                                             nn.PReLU(64)) for x in range(2)])
         self.conv2 = nn.Sequential(Conv(64, 3, 9, 1, act=nn.Tanh()))
 
     def forward(self, inputs: torch.Tensor):
@@ -471,10 +521,10 @@ if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.jit.enable_onednn_fusion(True)
     model = Model(ResNet(16))
-
-    ckpt = torch.load("../gen_checkpoint.pt", "cpu")
-    model.net.load_state_dict(ckpt['gen_net'])
-    model.init_normalize(ckpt['mean'], ckpt['std'])
+    # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
+    # ckpt = torch.load("../gen_checkpoint.pt", "cpu")
+    # model.net.load_state_dict(ckpt['gen_net'])
+    # model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False
     model.eval().fuse()
@@ -484,8 +534,10 @@ if __name__ == '__main__':
         device = torch_directml.device(0)
     except Exception as ex:
         device = torch.device(0) if torch.cuda.is_available() else "cpu"
+    device = "cpu"
+
     model.to(device)
-    feed = torch.zeros([1, 3, 224, 224], device=device)
+    feed = torch.zeros([1, 3, 96, 96], device=device)
 
     if torch.cuda.is_available():
         model.half()
@@ -501,8 +553,8 @@ if __name__ == '__main__':
     print(f"times: {perf_counter() - t0}")
     jit_m = torch.jit.trace(model, feed)
     torch.jit.save(jit_m, "model.pt")
-    axe = {'images': {2: "x", 3: "x"}, "outputs": {}}
-    torch.onnx.export(model, feed, "model.onnx", dynamic_axes=axe,
+    # axe = {'images': {2: "x", 3: "x"}, "outputs": {}}
+    torch.onnx.export(model, feed, "model.onnx",
                       input_names=["images"], output_names=["outputs"])
     import onnx
     from onnxsim import simplify
