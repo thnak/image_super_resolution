@@ -113,10 +113,10 @@ def convert_image_to_jpg(image_file: str | Path):
     if isinstance(image_file, str):
         image_file = Path(image_file)
     image = Image.open(image_file.as_posix())
-    if image.mode in ("RGBA", "P"):
+    if image.mode in ("RGBA", "P", "L"):
         image = image.convert("RGB")
-    save_dir = image_file.with_suffix(".jpg")
-    image.save(save_dir, format="JPEG", quality=95)
+    save_dir = image_file.with_suffix(".png")
+    image.save(save_dir, format="PNG", compress_level=4)
     image_file.unlink()
     return save_dir
 

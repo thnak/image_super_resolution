@@ -202,6 +202,7 @@ class SR_dataset(Dataset):
 
     def __init__(self, json_path, target_size, scales_factor, calculateNorm=True, prefix=""):
         json_path = json_path if isinstance(json_path, Path) else Path(json_path)
+        self.json_path = json_path
         with open(json_path.as_posix(), "r") as fi:
             self.samples = json.load(fi)
         target_size = ground_up(target_size, scales_factor)
@@ -265,6 +266,8 @@ class SR_dataset(Dataset):
             print(f"error {ex}")
             converted_image = convert_image_to_jpg(self.samples[item]).as_posix()
             self.samples[item] = converted_image
+            with open(self.json_path.as_posix(), "w") as fi:
+                fi.write(json.dumps(self.samples))
             image = read_image(converted_image, ImageReadMode.RGB)  # CHW
 
         image = self.ran_position(image)

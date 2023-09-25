@@ -47,7 +47,7 @@ def runer(**kwargs):
     device = torch.device(device)
     model = torch.jit.load(model_dir, "cpu")
     model.to(device).eval()
-    model = torch.jit.optimize_for_inference(model)
+    # model = torch.jit.optimize_for_inference(model)
     norm_ = Normalize().to(device)
     rgb2bgr = RGB2BGR().to(device)
 

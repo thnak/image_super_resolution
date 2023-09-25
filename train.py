@@ -54,7 +54,7 @@ def train(model: any, dataloader, compute_loss: MSELoss, optimizer: any, gradsca
             gradscaler.update()
             schedule.step()
             losses.append(loss.item())
-        pbar.desc = f"Epoch [{epoch}] Loss: {np.mean(losses)}"
+        pbar.desc = f"Epoch [{epoch}] Loss: {np.mean(losses)} minLoss: {np.min(losses)}"
     return np.mean(losses)
 
 
@@ -74,6 +74,8 @@ def train_srgan(gen_net: SRGAN, dis_net: Discriminator, dataloader, content_loss
     for idx, (hr_images, lr_images) in enumerate(pbar):
         hr_images, lr_images = hr_images.to(device), lr_images.to(device)
         for x in range(1):
+            for pa in dis_net.parameters():
+                pa.requires_grad = False
             with autocast(device_type=device.type,
                           enabled=device.type == 'cuda'):
                 sr_images = gen_net(lr_images)
@@ -87,6 +89,8 @@ def train_srgan(gen_net: SRGAN, dis_net: Discriminator, dataloader, content_loss
             gradscaler.update()
             loss_g.append(loss.item())
 
+            for pa in dis_net.parameters():
+                pa.requires_grad = True
             with autocast(device_type=device.type,
                           enabled=device.type == 'cuda'):
                 sr_discriminated = dis_net(sr_images.detach())
@@ -122,6 +126,8 @@ if __name__ == '__main__':
     parser.add_argument("--dml", action="store_true")
     parser.add_argument("--mean", action="store_true")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--L1_loss", action="store_true")
+    parser.add_argument("--rs_deep", type=int, default=16, help="")
 
     opt = parser.parse_args()
     json_file = Path("./train_images.json")
@@ -152,7 +158,7 @@ if __name__ == '__main__':
     data_std = None
 
     if opt.train_denoise:
-        model = Denoise(8)
+        model = Denoise(opt.rs_deep)
         model.to(device)
         for x in model.parameters():
             x.requires_grad = True
@@ -192,8 +198,8 @@ if __name__ == '__main__':
         dataloader = init_dataloader(dataset, batch_size=batch_size, num_worker=workers)[0]
         prefix = "Train: "
         if opt.resnet:
-            model = ResNet(14)
-            compute_loss = nn.MSELoss()
+            model = ResNet(opt.rs_deep)
+            compute_loss = nn.L1Loss() if opt.L1_loss else nn.MSELoss()
             optimizer = torch.optim.Adam(params=model.parameters(), lr=lr, betas=(0.9, 0.999), eps=0.0001,
                                          weight_decay=weight_decay)
 
@@ -223,7 +229,7 @@ if __name__ == '__main__':
                            res_checkpoints.as_posix())
 
         else:
-            gen_net = SRGAN(ResNet(16))
+            gen_net = SRGAN(ResNet(opt.rs_deep))
             dis_net = Discriminator(3, 64, 8, 1024)
             for x in gen_net.parameters():
                 x.requires_grad = True
@@ -262,7 +268,7 @@ if __name__ == '__main__':
                 gen_net.net.load_state_dict(torch.load(res_checkpoints, "cpu")['gen_net'])
 
             adv_loss_compute = Adversarial()
-            content_loss_compute = Content_Loss(device=device)
+            content_loss_compute = Content_Loss(mse=not opt.L1_loss, device=device)
             gen_net.to(device)
             dis_net.to(device)
             n_P = sum([x.numel() for x in gen_net.parameters()])

@@ -11,7 +11,7 @@ from utils.datasets import Normalize
 
 
 class FullyConnected(nn.Module):
-    def __init__(self, in_channel: int, out_channel: int, act=False):
+    def __init__(self, in_channel: int, out_channel: int, act: any = False):
         """Linear + BatchNorm + Act
         act = False -> nn.Identity() otherwise nn.Act"""
         super().__init__()
@@ -50,11 +50,15 @@ class Conv(nn.Module):
         self.drop = nn.Dropout(p=dropout) if dropout > 0. else nn.Identity()
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
-    def forward(self, x):
+    def _forward_impl(self, x):
         return self.drop(self.act(self.bn(self.conv(x))))
 
-    def fuseforward(self, x):
-        return self.act(self.conv(x))
+    def forward(self, x):
+        return self._forward_impl(x)
+
+    def fuseforward(self):
+        self.bn = nn.Identity()
+        self.drop = nn.Identity()
 
 
 class ConvWithoutBN(nn.Module):
@@ -77,11 +81,15 @@ class ConvWithoutBN(nn.Module):
         self.drop = nn.Dropout(p=dropout) if dropout > 0. else nn.Identity()
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
-    def forward(self, x):
+    def _forward_impl(self, x):
         return self.drop(self.act(self.conv(x)))
 
-    def fuseforward(self, x):
-        return self.act(self.conv(x))
+    def forward(self, x):
+        return self.forward(x)
+
+    def fuseforward(self):
+        self.bn = nn.Identity()
+        self.drop = nn.Identity()
 
 
 class ResidualBlock1(nn.Module):
@@ -149,6 +157,7 @@ class RRDB(nn.Module):
 
     def __init__(self, in_channel: int, out_channel: int, hidden_channel: int, kernel: any, act: any, add_rate=0.2):
         super().__init__()
+        assert 0 < add_rate <= 1, f"add must be in range (0, 1]"
         self.m = nn.Sequential(Conv(in_channel, hidden_channel, kernel, 1, None, act=act),
                                RDB(hidden_channel, hidden_channel, nn.PReLU(hidden_channel), add_rate=add_rate),
                                Conv(hidden_channel, out_channel, kernel, 1, None, act=act))
@@ -369,7 +378,7 @@ class Discriminator(nn.Module):
         for i in range(n_blocks):
             out_channels = (n_channels if i == 0 else in_channels * 2) if i % 2 == 0 else in_channels
             conv_blocks.append(Conv(in_channels, out_channels, kernel_size, 1 if i % 2 == 0 else 2, None,
-                                    act=nn.PReLU(out_channels)))
+                                    act=nn.LeakyReLU()))
             in_channels = out_channels
         self.conv_blocks = nn.Sequential(*conv_blocks)
 
@@ -377,7 +386,7 @@ class Discriminator(nn.Module):
         # For the default input size of 96 and 8 convolutional blocks, this will have no effect
         self.adaptive_pool = nn.AdaptiveAvgPool2d((6, 6))
         self.fc1 = nn.Linear(out_channels * 6 * 6, fc_size)
-        self.fc1 = FullyConnected(out_channels * 6 * 6, fc_size, act=nn.PReLU(fc_size))
+        self.fc1 = FullyConnected(out_channels * 6 * 6, fc_size, act=nn.LeakyReLU())
         self.fc2 = nn.Linear(fc_size, 1)
 
     def forward(self, inputs):
@@ -401,8 +410,7 @@ class Scaler(nn.Module):
         act = fix_problem_with_reuse_activation_funtion(act)
         out_channel = out_channel * (scale_factor ** 2)
         if isinstance(act, nn.PReLU):
-            num_parameters = act.num_parameters
-            if num_parameters != 1:
+            if act.num_parameters != 1:
                 act = nn.PReLU(out_channel // (scale_factor * 2))
         scaler = [Conv(in_channel, out_channel, kernel_size, 1, None, act=False),
                   nn.PixelShuffle(scale_factor), act]
@@ -410,7 +418,10 @@ class Scaler(nn.Module):
         self.net = nn.Sequential(*scaler)
 
     def forward(self, inputs: torch.Tensor):
-        return self.net(inputs)
+        return self._forward_impl(inputs)
+
+    def _forward_impl(self, x):
+        return self.net(x)
 
 
 class ResNet(nn.Module):
@@ -420,13 +431,13 @@ class ResNet(nn.Module):
         self.conv0 = nn.Sequential(Conv(3, 64, 9, act=False))
         residual = [RRDB(64, 64,
                          64, 3,
-                         act=nn.PReLU()) for x in range(num_block_resnet)]
+                         act=nn.LeakyReLU(), add_rate=1) for x in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
         self.scaler = nn.Sequential(*[Scaler(64, 64,
                                              2, 3,
-                                             nn.PReLU()) for x in range(2)])
+                                             nn.LeakyReLU()) for x in range(2)])
         self.conv2 = nn.Sequential(Conv(64, 3, 9, 1, act=nn.Tanh()))
 
     def forward(self, inputs: torch.Tensor):
@@ -461,8 +472,9 @@ class Denoise(nn.Module):
                                    act=nn.PReLU()) for x in range(residual_blocks)]
         self.residual = nn.Sequential(*residual)
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
-        self.scaler = nn.Sequential(
-            *[nn.Sequential(Scaler(64, 64, 2, 3, nn.PReLU())) for x in range(2)])
+        self.scaler = nn.Sequential(*[nn.Sequential(Scaler(64,
+                                                           64, 2, 3,
+                                                           nn.PReLU())) for x in range(2)])
         self.conv2 = nn.Sequential(Conv(64, 32, 9, 1, act=nn.PReLU()),
                                    Conv(32, 3, 1, 1, None, act=nn.Tanh()),
                                    nn.AvgPool2d(2, 4, 0))
@@ -516,19 +528,16 @@ class Model(nn.Module):
             if isinstance(m, Conv):
                 if hasattr(m, "bn"):
                     m.conv = fuse_conv_and_bn(m.conv, m.bn)
-                    m.forward = m.fuseforward
-                    delattr(m, 'bn')
-                    if hasattr(m, "drop"):
-                        delattr(m, "drop")
+                    m.fuseforward()
         return self
 
 
 if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.jit.enable_onednn_fusion(True)
-    model = Model(ResNet(16))
+    model = Model(ResNet(23))
     # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
-    # ckpt = torch.load("../gen_checkpoint.pt", "cpu")
+    # ckpt = torch.load("../res_checkpoint.pt", "cpu")
     # model.net.load_state_dict(ckpt['gen_net'])
     # model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
