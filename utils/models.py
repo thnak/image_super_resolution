@@ -39,7 +39,10 @@ class Conv(nn.Module):
             d = 1
         act = fix_problem_with_reuse_activation_funtion(act)
         if isinstance(act, nn.PReLU):
-            act = nn.PReLU(c2)
+            if act.num_parameters != 1:
+                act = nn.PReLU(c2)
+            else:
+                act = nn.PReLU()
         assert 0 <= dropout <= 1, f"dropout rate must be 0 <= dropout <= 1, your {dropout}"
         pad = autopad(k, p, d) if isinstance(k, int) else [autopad(k[0], p, d), autopad(k[1], p, d)]
         self.conv = nn.Conv2d(c1, c2, k, s, pad, groups=g, dilation=d, bias=False)
@@ -64,7 +67,10 @@ class ConvWithoutBN(nn.Module):
             d = 1
         act = fix_problem_with_reuse_activation_funtion(act)
         if isinstance(act, nn.PReLU):
-            act = nn.PReLU(c2)
+            if act.num_parameters != 1:
+                act = nn.PReLU(c2)
+            else:
+                act = nn.PReLU()
         assert 0 <= dropout <= 1, f"dropout rate must be 0 <= dropout <= 1, your {dropout}"
         pad = autopad(k, p, d) if isinstance(k, int) else [autopad(k[0], p, d), autopad(k[1], p, d)]
         self.conv = nn.Conv2d(c1, c2, k, s, pad, groups=g, dilation=d, bias=True)
@@ -120,8 +126,9 @@ class ResidualBlock3(nn.Module):
 class RDB(nn.Module):
     """Residual Dense Block"""
 
-    def __init__(self, filter, out_channel, act):
+    def __init__(self, filter, out_channel, act, add_rate=0.2):
         super().__init__()
+        self.add_rate = add_rate
         self.conv0 = Conv(filter + filter * 0, filter, 3, 1, None, act=act)
         self.conv1 = Conv(filter + filter * 1, filter, 3, 1, None, act=act)
         self.conv2 = Conv(filter + filter * 2, filter, 3, 1, None, act=act)
@@ -134,22 +141,21 @@ class RDB(nn.Module):
         output2 = self.conv2(torch.cat([inputs, output0, output1], 1))
         output3 = self.conv3(torch.cat([inputs, output0, output1, output2], 1))
         output3 = self.conv(torch.cat([inputs, output0, output1, output2, output3], 1))
-        return output3 * 0.2 + inputs
+        return output3 * self.add_rate + inputs
 
 
 class RRDB(nn.Module):
     """Residual in Residual Dense Block"""
 
-    def __init__(self, in_channel: int, out_channel: int, hidden_channel: int, kernel: any, act: any):
+    def __init__(self, in_channel: int, out_channel: int, hidden_channel: int, kernel: any, act: any, add_rate=0.2):
         super().__init__()
         self.m = nn.Sequential(Conv(in_channel, hidden_channel, kernel, 1, None, act=act),
-                               RDB(hidden_channel, hidden_channel, nn.PReLU(hidden_channel)),
-                               RDB(hidden_channel, hidden_channel, nn.PReLU(hidden_channel)),
-                               RDB(hidden_channel, hidden_channel, nn.PReLU(hidden_channel)),
+                               RDB(hidden_channel, hidden_channel, nn.PReLU(hidden_channel), add_rate=add_rate),
                                Conv(hidden_channel, out_channel, kernel, 1, None, act=act))
+        self.add_rate = add_rate
 
     def forward(self, inputs: torch.Tensor):
-        return inputs + self.m(inputs) * 0.2
+        return inputs + self.m(inputs) * self.add_rate
 
 
 class elan(nn.Module):
@@ -413,14 +419,14 @@ class ResNet(nn.Module):
 
         self.conv0 = nn.Sequential(Conv(3, 64, 9, act=False))
         residual = [RRDB(64, 64,
-                         72, 3,
-                         act=nn.PReLU(64)) for x in range(num_block_resnet)]
+                         64, 3,
+                         act=nn.PReLU()) for x in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
         self.scaler = nn.Sequential(*[Scaler(64, 64,
                                              2, 3,
-                                             nn.PReLU(64)) for x in range(2)])
+                                             nn.PReLU()) for x in range(2)])
         self.conv2 = nn.Sequential(Conv(64, 3, 9, 1, act=nn.Tanh()))
 
     def forward(self, inputs: torch.Tensor):

@@ -33,7 +33,7 @@ def optimizer_to(optim, device):
                         subparam._grad.data = subparam._grad.data.to(device)
 
 
-def train(model: any, dataloader, compute_loss: MSELoss, optimizer: any, gradscaler: GradScaler, epoch: int):
+def train(model: any, dataloader, compute_loss: MSELoss, optimizer: any, gradscaler: GradScaler, schedule, epoch: int):
     model.train()
     losses = []
     device = next(model.parameters()).device
@@ -52,7 +52,7 @@ def train(model: any, dataloader, compute_loss: MSELoss, optimizer: any, gradsca
             clip_grad_norm_(model.parameters(), 10)
             gradscaler.step(optimizer)
             gradscaler.update()
-
+            schedule.step()
             losses.append(loss.item())
         pbar.desc = f"Epoch [{epoch}] Loss: {np.mean(losses)}"
     return np.mean(losses)
@@ -116,7 +116,7 @@ if __name__ == '__main__':
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--work_dir", type=str, default="./")
     parser.add_argument("--momentum", type=float, default=0.999)
-    parser.add_argument("--weight_decay", type=float, default=0.00059)
+    parser.add_argument("--weight_decay", type=float, default=0.000)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--dml", action="store_true")
@@ -194,10 +194,11 @@ if __name__ == '__main__':
         if opt.resnet:
             model = ResNet(14)
             compute_loss = nn.MSELoss()
-            optimizer = torch.optim.SGD(params=model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
+            optimizer = torch.optim.Adam(params=model.parameters(), lr=lr, betas=(0.9, 0.999), eps=0.0001,
+                                         weight_decay=weight_decay)
 
-            schedule = LinearLR(optimizer, start_factor=1, end_factor=0.01,
-                                total_iters=epochs)
+            schedule = LinearLR(optimizer, start_factor=1, end_factor=0.001,
+                                total_iters=10 * len(dataloader))
             start_epoch = 0
             model.to(device)
             n_P = sum([x.numel() for x in model.parameters()])
@@ -213,14 +214,13 @@ if __name__ == '__main__':
                         start_epoch = ckpt['epoch'] + 1
                     optimizer_to(optimizer, device)
                     print(f"Loaded pre-trained {len(checkpoint_state)}/{len(model.state_dict())} model")
-                    del ckpt
+                    del ckpt, checkpoint_state
 
             for epoch in range(start_epoch, epochs):
-                    loss = train(model, dataloader, compute_loss, optimizer, scaler, epoch)
-                    schedule.step()
-                    torch.save({"gen_net": model.state_dict(), "optimizer": optimizer.state_dict(),
-                                "epoch": epoch, "mean": dataset.mean, "std": dataset.std, "loss": loss},
-                               res_checkpoints.as_posix())
+                loss = train(model, dataloader, compute_loss, optimizer, scaler, schedule, epoch)
+                torch.save({"gen_net": model.state_dict(), "optimizer": optimizer.state_dict(),
+                            "epoch": epoch, "mean": dataset.mean, "std": dataset.std, "loss": loss},
+                           res_checkpoints.as_posix())
 
         else:
             gen_net = SRGAN(ResNet(16))
@@ -229,10 +229,10 @@ if __name__ == '__main__':
                 x.requires_grad = True
             for x in dis_net.parameters():
                 x.requires_grad = True
-            optimizer_g = torch.optim.SGD(params=gen_net.parameters(), lr=lr,
-                                          momentum=momentum, weight_decay=weight_decay)
-            optimizer_d = torch.optim.SGD(params=dis_net.parameters(), lr=lr,
-                                          momentum=momentum, weight_decay=weight_decay)
+            optimizer_g = torch.optim.Adam(params=gen_net.parameters(), lr=lr, betas=(0.9, 0.999), eps=0.0001,
+                                           weight_decay=weight_decay)
+            optimizer_d = torch.optim.Adam(params=dis_net.parameters(), lr=lr, betas=(0.9, 0.999), eps=0.0001,
+                                           weight_decay=weight_decay)
             schedule_g = LinearLR(optimizer_g, start_factor=1, end_factor=0.01,
                                   total_iters=epochs)
             schedule_d = LinearLR(optimizer_d, start_factor=1, end_factor=0.01,
