@@ -48,7 +48,7 @@ def autopad(kernel_size: int | tuple[int] | list[int], pad_size=None, dilation=1
     return pad_size
 
 
-def create_data_lists(train_folders, test_folders, min_size, output_folder="./"):
+def create_data_lists(train_folders, test_folders, min_size, output_folder="./", verbose=False):
     """
     Create lists for images in the training set and each of the test sets.
 
@@ -66,7 +66,8 @@ def create_data_lists(train_folders, test_folders, min_size, output_folder="./")
                 if image.mode in ("RGBA", "P", "L"):
                     i = convert_image_to_jpg(i)
                 if image.width < min_size or image.height < min_size:
-                    print(f"ignore small image {i.as_posix()} require {min_size}")
+                    if verbose:
+                        print(f"ignore small image {i.as_posix()} require {min_size}")
                     image.close()
                     i.unlink(True)
                 else:
@@ -75,10 +76,9 @@ def create_data_lists(train_folders, test_folders, min_size, output_folder="./")
                     try:
                         image.verify()
                         image.close()
-                        train_images.append(i.as_posix())
-
                     except:
                         continue
+                train_images.append(i.as_posix())
 
     print("There are %d images in the training data.\n" % len(train_images))
     save_dir = Path(output_folder)
@@ -91,14 +91,17 @@ def create_data_lists(train_folders, test_folders, min_size, output_folder="./")
             if i.suffix in IMG_FORMATS:
                 image = Image.open(i.as_posix())
                 if image.width < min_size or image.height < min_size:
-                    print(f"ignore small image {i.as_posix()} require {min_size}")
+                    if verbose:
+                        print(f"ignore small image {i.as_posix()} require {min_size}")
                     i.unlink(True)
                 else:
                     if i.suffix not in torchvisionImage_Formats:
                         i = convert_image_to_jpg(i)
                     try:
                         image.verify()
+                        image.close()
                     except:
+                        i.unlink(missing_ok=True)
                         continue
                     train_images.append(i.as_posix())
 

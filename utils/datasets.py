@@ -20,11 +20,13 @@ class Random_low_rs(Module):
     def __init__(self, input_shape, scale_factor):
         super(Random_low_rs, self).__init__()
         self.scale_factor = scale_factor
-        self.input_shape = input_shape
+        self.shape = input_shape // scale_factor
 
     def forward(self, inputs):
-        inputs = inputs[:, ::self.scale_factor, ::self.scale_factor]
-        return inputs
+        if random.random() != 1:
+            return inputs[:, ::self.scale_factor, ::self.scale_factor]
+        else:
+            return T.resize(inputs, [self.shape, self.shapel])
 
 
 class Random_position(Module):
@@ -147,6 +149,16 @@ class RandomNoisyImage(Module):
         return torch.from_numpy(noisy)
 
 
+class Ychannel(Module):
+    def __init__(self):
+        super().__init__()
+        self.register_buffer("image_weight", torch.tensor([65.481, 128.553, 24.966]))
+
+    def forward(self, inputs: torch.Tensor):
+        inputs = inputs.to(device=self.image_weight.device)
+        return torch.matmul(255. * inputs.permute(0, 2, 3, 1)[:, 4:-4, 4:-4, :], self.image_weight) / 255. + 16.
+
+
 class ColorJitter(Module):
     def __init__(self,
                  brightness=0.2,
@@ -258,6 +270,7 @@ class SR_dataset(Dataset):
     def set_transform_hr(self):
         """set transform for srgen"""
         self.transform_hr = Normalize(self.mean, self.std)
+        return self
 
     def __getitem__(self, item):
         try:
@@ -272,7 +285,7 @@ class SR_dataset(Dataset):
                     fi.write(json.dumps(self.samples))
                 image = read_image(converted_image, ImageReadMode.RGB)  # CHW
         except:
-            image = read_image(self.samples[item+1], ImageReadMode.RGB)  # CHW
+            image = read_image(self.samples[item + 1], ImageReadMode.RGB)  # CHW
 
         image = self.ran_position(image)
         return self.transform_hr(image), self.transform_lr(image)

@@ -1,17 +1,48 @@
 from __future__ import annotations
+
+import math
 import sys
 import torch
 import torchvision
 from torch import nn
 from torch.nn import functional as F
 from tqdm import tqdm
+from copy import deepcopy
 
 sys.path.append("./")
 from utils.general import fix_problem_with_reuse_activation_funtion, ACT_LIST, autopad, intersect_dicts
 from utils.datasets import Normalize
 
 
+class ModelEMA:
+    """ Updated Exponential Moving Average (EMA) from https://github.com/rwightman/pytorch-image-models
+    Keeps a moving average of everything in the model state_dict (parameters and buffers)
+    For EMA details see https://www.tensorflow.org/api_docs/python/tf/train/ExponentialMovingAverage
+    """
+
+    def __init__(self, model: nn.Module, decay=0.9999, tau=2000, updates=0):
+        # Create EMA
+        self.ema = deepcopy(model).eval()  # init EMA
+        self.updates = updates  # number of EMA updates
+        self.decay = lambda x: decay * (1 - math.exp(-x / tau))  # decay exponential ramp (to help early epochs)
+        for p in self.ema.parameters():
+            p.requires_grad = False
+
+    def update(self, model):
+        """Update EMA parameters"""
+        self.updates += 1
+        d = self.decay(self.updates)
+
+        msd = model.state_dict()  # model state_dict
+        for k, v in self.ema.state_dict().items():
+            if v.dtype.is_floating_point:  # true for FP16 and FP32
+                v *= d
+                v += (1 - d) * msd[k].detach()
+
+
 class FullyConnected(nn.Module):
+    store_bn = nn.Identity()
+
     def __init__(self, in_channel: int, out_channel: int, act: any = False):
         """Linear + BatchNorm + Act
         act = False -> nn.Identity() otherwise nn.Act"""
@@ -30,11 +61,19 @@ class FullyConnected(nn.Module):
         return self._forward_impl(inputs)
 
     def fuseforward(self):
-        self.bn = nn.Identity()
+        if isinstance(self.bn, nn.BatchNorm1d):
+            self.store_bn = self.bn
+            self.bn = nn.Identity()
+
+    def defuseforward(self):
+        if isinstance(self.bn, nn.Identity):
+            self.bn = self.store_bn
+            self.store_bn = nn.Identity()
 
 
 class Conv(nn.Module):
     """Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation, dropout"""
+    store_bn = nn.Identity()
 
     def __init__(self, c1, c2, k: any = 1, s: any = 1, p=None, g=1, d=1, act: any = True, dropout=0.):
         super(Conv, self).__init__()
@@ -61,12 +100,19 @@ class Conv(nn.Module):
         return self._forward_impl(x)
 
     def fuseforward(self):
-        self.bn = nn.Identity()
-        self.drop = nn.Identity()
+        if isinstance(self.bn, nn.BatchNorm2d):
+            self.store_bn = self.bn
+            self.bn = nn.Identity()
+
+    def defuseforward(self):
+        if isinstance(self.bn, nn.Identity):
+            self.bn = self.store_bn
+            self.store_bn = nn.Identity()
 
 
 class ConvWithoutBN(nn.Module):
     """Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation, dropout"""
+    store_bn = nn.Identity()
 
     def __init__(self, c1, c2, k: any = 1, s: any = 1, p=None, g=1, d=1, act: any = True, dropout=0.):
         super().__init__()
@@ -89,11 +135,7 @@ class ConvWithoutBN(nn.Module):
         return self.drop(self.act(self.conv(x)))
 
     def forward(self, x):
-        return self.forward(x)
-
-    def fuseforward(self):
-        self.bn = nn.Identity()
-        self.drop = nn.Identity()
+        return self._forward_impl(x)
 
 
 class ResidualBlock1(nn.Module):
@@ -175,7 +217,7 @@ class RDB_PixelShuffle(nn.Module):
         output2 = self.conv2(torch.cat([inputs, output0, output1], 1))
         output3 = self.conv3(torch.cat([inputs, output0, output1, output2], 1))
         output3 = torch.cat([output0, output1, output2, output3], 1)
-        output3 = F.pixel_shuffle(output3, 4)
+        output3 = F.pixel_shuffle(output3, 2)
         output3 = F.max_pool2d(output3, kernel_size=2, stride=2, padding=0)
         output3 = self.conv(output3)
         return output3 * self.add_rate + inputs
@@ -192,14 +234,22 @@ class RRDB(nn.Module):
                 act = nn.PReLU(hidden_channel)
             else:
                 act = nn.PReLU()
-        self.m = nn.Sequential(Conv(in_channel, hidden_channel, kernel, 1, None, act=act),
-                               RDB(hidden_channel, hidden_channel, act, add_rate=add_rate / 2),
-                               RDB_PixelShuffle(hidden_channel, hidden_channel, act, add_rate=add_rate / 2),
-                               Conv(hidden_channel, out_channel, kernel, 1, None, act=act))
+
+        self.conv0 = Conv(in_channel, hidden_channel, kernel, 1, None, act=act)
+        rdbs = []
+        for x in range(3):
+            if x % 3:
+                rdbs.append(RDB_PixelShuffle(hidden_channel, hidden_channel, act, add_rate=add_rate / 2))
+            else:
+                rdbs.append(RDB(hidden_channel, hidden_channel, act, add_rate=add_rate / 2))
+        self.RDB = nn.Sequential(*rdbs)
+        self.conv1 = Conv(hidden_channel, out_channel, kernel, 1, None, act=False)
         self.add_rate = add_rate
 
     def forward(self, inputs: torch.Tensor):
-        return inputs + self.m(inputs) * self.add_rate
+        outputs = self.conv0(inputs)
+        outputs = self.RDB(outputs)
+        return inputs + self.conv1(outputs) * self.add_rate
 
 
 class elan(nn.Module):
@@ -465,15 +515,23 @@ class ResNet(nn.Module):
 
         self.conv0 = nn.Sequential(Conv(3, 64, 9, act=False))
         residual = [RRDB(64, 64,
-                         64, 1,
-                         act=nn.LeakyReLU(), add_rate=0.75) for _ in range(num_block_resnet)]
+                         64, 3,
+                         act=nn.PReLU(), add_rate=0.5) for _ in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
-        self.scaler = nn.Sequential(*[Scaler(64, 64,
-                                             2, 3,
-                                             nn.LeakyReLU()) for _ in range(2)])
+        scaler = [Scaler(64, 64,
+                         2, 3,
+                         nn.PReLU()) for _ in range(2)]
+        self.scaler = nn.Sequential(*scaler)
         self.conv2 = nn.Sequential(Conv(64, 3, 9, 1, act=nn.Tanh()))
+
+        for module in self.modules():
+            if isinstance(module, nn.Conv2d):
+                nn.init.kaiming_normal_(module.weight)
+                module.weight.data *= 0.2
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
 
     def forward(self, inputs: torch.Tensor):
         inputs = self.conv0(inputs)
@@ -485,10 +543,10 @@ class ResNet(nn.Module):
 
 class SRGAN(nn.Module):
 
-    def __init__(self, resnet):
+    def __init__(self, resnet, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
         super().__init__()
-        self.net = resnet
-        self.tanh_to_norm = ConvertTanh2Norm()
+        self.net = ResNet(resnet)
+        self.tanh_to_norm = ConvertTanh2Norm(mean=mean, std=std)
 
     def forward(self, inputs: torch.Tensor):
         inputs = self.net(inputs)
@@ -566,15 +624,34 @@ class Model(nn.Module):
                     m.fuseforward()
         return self
 
+    def defuse(self):
+        """de-fuse model Conv2d() + BatchNorm2d() layers, fuse Conv2d + im"""
+        prefix = "Fusing layers... "
+        p_bar = tqdm(self.modules(), desc=f'{prefix}', unit=" layer")
+        for m in p_bar:
+            p_bar.set_description_str(f"fusing {m.__class__.__name__}")
+            if isinstance(m, Conv):
+                m.defuseforward()
+                conv = nn.Conv2d(m.in_channels,
+                                 m.out_channels,
+                                 kernel_size=m.kernel_size,
+                                 stride=m.stride,
+                                 padding=m.padding,
+                                 groups=m.groups,
+                                 bias=False)
+                m.weight = conv.weight
+                m.bias = conv.bias
+        return self
+
 
 if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.jit.enable_onednn_fusion(True)
-    model = Model(SRGAN(ResNet(4)))
+    model = Model(SRGAN(23))
     # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
-    ckpt = torch.load("../gen_checkpoint.pt", "cpu")
-    model.net.load_state_dict(ckpt['gen_net'])
-    model.init_normalize(ckpt['mean'], ckpt['std'])
+    # ckpt = torch.load("../gen_checkpoint.pt", "cpu")
+    # model.net.load_state_dict(ckpt['gen_net'])
+    # model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False
     model.eval().fuse()
