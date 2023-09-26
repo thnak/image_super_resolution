@@ -58,7 +58,8 @@ def train(model: any, dataloader, compute_loss: MSELoss, optimizer: any, gradsca
     return np.mean(losses)
 
 
-def train_srgan(gen_net: SRGAN, dis_net: Discriminator, dataloader, content_loss: Content_Loss, adv_loss: Adversarial,
+def train_srgan(gen_net: SRGAN, dis_net: Discriminator, dataloader,
+                content_loss: Content_Loss, adv_loss: Adversarial,
                 optimizer_g: Adam | SGD,
                 optimizer_d: Adam | SGD,
                 gradscaler: GradScaler, epoch: int):
@@ -128,6 +129,7 @@ if __name__ == '__main__':
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--L1_loss", action="store_true")
     parser.add_argument("--rs_deep", type=int, default=16, help="")
+    parser.add_argument("--shape", type=int, default=96)
 
     opt = parser.parse_args()
     json_file = Path("./train_images.json")
@@ -174,9 +176,9 @@ if __name__ == '__main__':
             data_std = ckpt.get('std', None)
             data_mean = ckpt.get('mean', None)
             print(f"Loaded pre-trained {len(checkpoint_state)}/{len(model.state_dict())} model")
-            del ckpt
+            del ckpt, checkpoint_state
 
-        dataset = Noisy_dataset(json_path=json_file.as_posix(), target_size=96,
+        dataset = Noisy_dataset(json_path=json_file.as_posix(), target_size=opt.shape,
                                 prefix="Train: ")
         dataloader = init_dataloader(dataset, batch_size=batch_size, num_worker=workers, shuffle=True)[0]
         compute_loss = nn.MSELoss()
@@ -192,7 +194,7 @@ if __name__ == '__main__':
                         "std": dataset.std}, denoise_checkpoints.as_posix())
 
     else:
-        dataset = SR_dataset(json_file, 96, 4, opt.mean, "Train: ")
+        dataset = SR_dataset(json_file, opt.shape, 4, opt.mean, "Train: ")
         if not opt.resnet:
             dataset.set_transform_hr()
         dataloader = init_dataloader(dataset, batch_size=batch_size, num_worker=workers)[0]

@@ -9,7 +9,7 @@ import torchvision.transforms.functional as T
 from torchvision.io import read_image, VideoReader, ImageReadMode
 import json
 from pathlib import Path
-
+from time import sleep
 from tqdm import tqdm
 
 from utils.general import ground_up, convert_image_to_jpg
@@ -261,14 +261,18 @@ class SR_dataset(Dataset):
 
     def __getitem__(self, item):
         try:
-            image = read_image(self.samples[item], ImageReadMode.RGB)  # CHW
-        except Exception as ex:
-            print(f"error {ex}")
-            converted_image = convert_image_to_jpg(self.samples[item]).as_posix()
-            self.samples[item] = converted_image
-            with open(self.json_path.as_posix(), "w") as fi:
-                fi.write(json.dumps(self.samples))
-            image = read_image(converted_image, ImageReadMode.RGB)  # CHW
+            try:
+                image = read_image(self.samples[item], ImageReadMode.RGB)  # CHW
+            except Exception as ex:
+                print(f"error {ex}")
+                converted_image = convert_image_to_jpg(self.samples[item]).as_posix()
+                sleep(0.1)
+                self.samples[item] = converted_image
+                with open(self.json_path.as_posix(), "w") as fi:
+                    fi.write(json.dumps(self.samples))
+                image = read_image(converted_image, ImageReadMode.RGB)  # CHW
+        except:
+            image = read_image(self.samples[item+1], ImageReadMode.RGB)  # CHW
 
         image = self.ran_position(image)
         return self.transform_hr(image), self.transform_lr(image)

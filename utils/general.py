@@ -63,6 +63,8 @@ def create_data_lists(train_folders, test_folders, min_size, output_folder="./")
         for i in Path(d).rglob('*'):
             if i.suffix in IMG_FORMATS:
                 image = Image.open(i.as_posix())
+                if image.mode in ("RGBA", "P", "L"):
+                    i = convert_image_to_jpg(i)
                 if image.width < min_size or image.height < min_size:
                     print(f"ignore small image {i.as_posix()} require {min_size}")
                     image.close()
@@ -116,7 +118,8 @@ def convert_image_to_jpg(image_file: str | Path):
     if image.mode in ("RGBA", "P", "L"):
         image = image.convert("RGB")
     save_dir = image_file.with_suffix(".png")
-    image.save(save_dir, format="PNG", compress_level=4)
+    image.save(save_dir.as_posix(), format="PNG", compress_level=4, bitmap_format=['png'])
+    image.close()
     image_file.unlink()
     return save_dir
 

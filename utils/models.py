@@ -3,6 +3,7 @@ import sys
 import torch
 import torchvision
 from torch import nn
+from torch.nn import functional as F
 from tqdm import tqdm
 
 sys.path.append("./")
@@ -22,11 +23,14 @@ class FullyConnected(nn.Module):
         self.bn = nn.BatchNorm1d(out_channel)
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
-    def forward(self, inputs: torch.Tensor):
+    def _forward_impl(self, inputs: torch.Tensor):
         return self.act(self.bn(self.linear(inputs)))
 
-    def fuseforward(self, inputs):
-        return self.act(self.linear(inputs))
+    def forward(self, inputs):
+        return self._forward_impl(inputs)
+
+    def fuseforward(self):
+        self.bn = nn.Identity()
 
 
 class Conv(nn.Module):
@@ -148,7 +152,32 @@ class RDB(nn.Module):
         output1 = self.conv1(torch.cat([inputs, output0], 1))
         output2 = self.conv2(torch.cat([inputs, output0, output1], 1))
         output3 = self.conv3(torch.cat([inputs, output0, output1, output2], 1))
-        output3 = self.conv(torch.cat([inputs, output0, output1, output2, output3], 1))
+        output3 = torch.cat([inputs, output0, output1, output2, output3], 1)
+        output3 = self.conv(output3)
+        return output3 * self.add_rate + inputs
+
+
+class RDB_PixelShuffle(nn.Module):
+    """Residual Dense Block"""
+
+    def __init__(self, filter, out_channel, act, add_rate=0.2):
+        super().__init__()
+        self.add_rate = add_rate
+        self.conv0 = Conv(filter + filter * 0, filter, 3, 1, None, act=act)
+        self.conv1 = Conv(filter + filter * 1, filter, 3, 1, None, act=act)
+        self.conv2 = Conv(filter + filter * 2, filter, 3, 1, None, act=act)
+        self.conv3 = Conv(filter + filter * 3, filter, 3, 1, None, act=act)
+        self.conv = Conv(filter, out_channel, 3, 1, None, act=False)
+
+    def forward(self, inputs):
+        output0 = self.conv0(inputs)
+        output1 = self.conv1(torch.cat([inputs, output0], 1))
+        output2 = self.conv2(torch.cat([inputs, output0, output1], 1))
+        output3 = self.conv3(torch.cat([inputs, output0, output1, output2], 1))
+        output3 = torch.cat([output0, output1, output2, output3], 1)
+        output3 = F.pixel_shuffle(output3, 4)
+        output3 = F.max_pool2d(output3, kernel_size=2, stride=2, padding=0)
+        output3 = self.conv(output3)
         return output3 * self.add_rate + inputs
 
 
@@ -158,8 +187,14 @@ class RRDB(nn.Module):
     def __init__(self, in_channel: int, out_channel: int, hidden_channel: int, kernel: any, act: any, add_rate=0.2):
         super().__init__()
         assert 0 < add_rate <= 1, f"add must be in range (0, 1]"
+        if isinstance(act, nn.PReLU):
+            if act.num_parameters != 1:
+                act = nn.PReLU(hidden_channel)
+            else:
+                act = nn.PReLU()
         self.m = nn.Sequential(Conv(in_channel, hidden_channel, kernel, 1, None, act=act),
-                               RDB(hidden_channel, hidden_channel, nn.PReLU(hidden_channel), add_rate=add_rate),
+                               RDB(hidden_channel, hidden_channel, act, add_rate=add_rate / 2),
+                               RDB_PixelShuffle(hidden_channel, hidden_channel, act, add_rate=add_rate / 2),
                                Conv(hidden_channel, out_channel, kernel, 1, None, act=act))
         self.add_rate = add_rate
 
@@ -426,18 +461,18 @@ class Scaler(nn.Module):
 
 class ResNet(nn.Module):
     def __init__(self, num_block_resnet=16):
-        super(ResNet, self).__init__()
+        super().__init__()
 
         self.conv0 = nn.Sequential(Conv(3, 64, 9, act=False))
         residual = [RRDB(64, 64,
-                         64, 3,
-                         act=nn.LeakyReLU(), add_rate=1) for x in range(num_block_resnet)]
+                         64, 1,
+                         act=nn.LeakyReLU(), add_rate=0.75) for _ in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
         self.scaler = nn.Sequential(*[Scaler(64, 64,
                                              2, 3,
-                                             nn.LeakyReLU()) for x in range(2)])
+                                             nn.LeakyReLU()) for _ in range(2)])
         self.conv2 = nn.Sequential(Conv(64, 3, 9, 1, act=nn.Tanh()))
 
     def forward(self, inputs: torch.Tensor):
@@ -535,11 +570,11 @@ class Model(nn.Module):
 if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.jit.enable_onednn_fusion(True)
-    model = Model(ResNet(23))
+    model = Model(SRGAN(ResNet(4)))
     # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
-    # ckpt = torch.load("../res_checkpoint.pt", "cpu")
-    # model.net.load_state_dict(ckpt['gen_net'])
-    # model.init_normalize(ckpt['mean'], ckpt['std'])
+    ckpt = torch.load("../gen_checkpoint.pt", "cpu")
+    model.net.load_state_dict(ckpt['gen_net'])
+    model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False
     model.eval().fuse()
