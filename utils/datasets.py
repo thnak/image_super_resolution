@@ -23,10 +23,7 @@ class Random_low_rs(Module):
         self.shape = input_shape // scale_factor
 
     def forward(self, inputs):
-        if random.random() != 1:
-            return inputs[:, ::self.scale_factor, ::self.scale_factor]
-        else:
-            return T.resize(inputs, [self.shape, self.shapel])
+        return inputs[:, ::self.scale_factor, ::self.scale_factor]
 
 
 class Random_position(Module):

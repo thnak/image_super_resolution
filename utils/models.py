@@ -180,14 +180,14 @@ class ResidualBlock3(nn.Module):
 class RDB(nn.Module):
     """Residual Dense Block"""
 
-    def __init__(self, filter, out_channel, act, add_rate=0.2):
+    def __init__(self, in_channel, out_channel, act, add_rate=0.2):
         super().__init__()
         self.add_rate = add_rate
-        self.conv0 = Conv(filter + filter * 0, filter, 3, 1, None, act=act)
-        self.conv1 = Conv(filter + filter * 1, filter, 3, 1, None, act=act)
-        self.conv2 = Conv(filter + filter * 2, filter, 3, 1, None, act=act)
-        self.conv3 = Conv(filter + filter * 3, filter, 3, 1, None, act=act)
-        self.conv = Conv(filter + filter * 4, out_channel, 3, 1, None, act=False)
+        self.conv0 = Conv(in_channel + in_channel * 0, in_channel, 3, 1, None, act=act)
+        self.conv1 = Conv(in_channel + in_channel * 1, in_channel, 3, 1, None, act=act)
+        self.conv2 = Conv(in_channel + in_channel * 2, in_channel, 3, 1, None, act=act)
+        self.conv3 = Conv(in_channel + in_channel * 3, in_channel, 3, 1, None, act=act)
+        self.conv = Conv(in_channel + in_channel * 4, out_channel, 5, 1, None, act=False)
 
     def forward(self, inputs):
         output0 = self.conv0(inputs)
@@ -238,10 +238,7 @@ class RRDB(nn.Module):
         self.conv0 = Conv(in_channel, hidden_channel, kernel, 1, None, act=act)
         rdbs = []
         for x in range(3):
-            if x % 3:
-                rdbs.append(RDB_PixelShuffle(hidden_channel, hidden_channel, act, add_rate=add_rate / 2))
-            else:
-                rdbs.append(RDB(hidden_channel, hidden_channel, act, add_rate=add_rate / 2))
+            rdbs.append(RDB(hidden_channel, hidden_channel, act, add_rate=add_rate / 2))
         self.RDB = nn.Sequential(*rdbs)
         self.conv1 = Conv(hidden_channel, out_channel, kernel, 1, None, act=False)
         self.add_rate = add_rate
@@ -428,6 +425,9 @@ class TruncatedVGG19(nn.Module):
 
         # Truncate to the jth convolution (+ activation) before the ith maxpool layer
         self.truncated_vgg19 = nn.Sequential(*list(vgg19.features.children())[:truncate_at + 1])
+        for x in self.modules():
+            if hasattr(x, "inplace"):
+                x.inplace = True
 
     def forward(self, inputs: torch.Tensor):
         """
@@ -470,9 +470,12 @@ class Discriminator(nn.Module):
         # An adaptive pool layer that resizes it to a standard size
         # For the default input size of 96 and 8 convolutional blocks, this will have no effect
         self.adaptive_pool = nn.AdaptiveAvgPool2d((6, 6))
-        self.fc1 = nn.Linear(out_channels * 6 * 6, fc_size)
         self.fc1 = FullyConnected(out_channels * 6 * 6, fc_size, act=nn.LeakyReLU())
         self.fc2 = nn.Linear(fc_size, 1)
+
+        for x in self.modules():
+            if hasattr(x, "inplace"):
+                x.inplace = True
 
     def forward(self, inputs):
         """
@@ -515,7 +518,7 @@ class ResNet(nn.Module):
 
         self.conv0 = nn.Sequential(Conv(3, 64, 9, act=False))
         residual = [RRDB(64, 64,
-                         64, 3,
+                         72, 3,
                          act=nn.PReLU(), add_rate=0.5) for _ in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
@@ -524,12 +527,16 @@ class ResNet(nn.Module):
                          2, 3,
                          nn.PReLU()) for _ in range(2)]
         self.scaler = nn.Sequential(*scaler)
-        self.conv2 = nn.Sequential(Conv(64, 3, 9, 1, act=nn.Tanh()))
+        self.conv2 = Conv(64, 3, 9, 1, act=nn.Tanh())
+
+        for x in self.modules():
+            if hasattr(x, "inplace"):
+                x.inplace = True
 
         for module in self.modules():
             if isinstance(module, nn.Conv2d):
                 nn.init.kaiming_normal_(module.weight)
-                module.weight.data *= 0.2
+                module.weight.data *= 2
                 if module.bias is not None:
                     nn.init.constant_(module.bias, 0)
 
@@ -647,7 +654,7 @@ class Model(nn.Module):
 if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.jit.enable_onednn_fusion(True)
-    model = Model(SRGAN(23))
+    model = Model(SRGAN(4))
     # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
     # ckpt = torch.load("../gen_checkpoint.pt", "cpu")
     # model.net.load_state_dict(ckpt['gen_net'])

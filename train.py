@@ -16,7 +16,7 @@ from tqdm import tqdm
 from utils.models import ResNet, SRGAN, Discriminator, Denoise, ModelEMA
 from utils.general import intersect_dicts
 from utils.datasets import SR_dataset, init_dataloader, Noisy_dataset
-from utils.loss import Content_Loss, Adversarial, gen_loss
+from utils.loss import gen_loss
 
 
 def optimizer_to(optim, device):
