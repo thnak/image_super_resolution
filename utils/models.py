@@ -180,14 +180,14 @@ class ResidualBlock3(nn.Module):
 class RDB(nn.Module):
     """Residual Dense Block"""
 
-    def __init__(self, in_channel, out_channel, act, add_rate=0.2):
+    def __init__(self, in_channel, growth_channel, kernel_size, act, add_rate=0.2):
         super().__init__()
         self.add_rate = add_rate
-        self.conv0 = Conv(in_channel + in_channel * 0, in_channel, 3, 1, None, act=act)
-        self.conv1 = Conv(in_channel + in_channel * 1, in_channel, 3, 1, None, act=act)
-        self.conv2 = Conv(in_channel + in_channel * 2, in_channel, 3, 1, None, act=act)
-        self.conv3 = Conv(in_channel + in_channel * 3, in_channel, 3, 1, None, act=act)
-        self.conv = Conv(in_channel + in_channel * 4, out_channel, 5, 1, None, act=False)
+        self.conv0 = Conv(in_channel + growth_channel * 0, growth_channel, kernel_size, 1, None, act=act)
+        self.conv1 = Conv(in_channel + growth_channel * 1, growth_channel, kernel_size, 1, None, act=act)
+        self.conv2 = Conv(in_channel + growth_channel * 2, growth_channel, kernel_size, 1, None, act=act)
+        self.conv3 = Conv(in_channel + growth_channel * 3, growth_channel, kernel_size, 1, None, act=act)
+        self.conv = Conv(in_channel + growth_channel * 4, in_channel, kernel_size, 1, None, act=False)
 
     def forward(self, inputs):
         output0 = self.conv0(inputs)
@@ -202,14 +202,14 @@ class RDB(nn.Module):
 class RDB_PixelShuffle(nn.Module):
     """Residual Dense Block"""
 
-    def __init__(self, filter, out_channel, act, add_rate=0.2):
+    def __init__(self, filter, out_channel, kernel_size, act, add_rate=0.2):
         super().__init__()
         self.add_rate = add_rate
-        self.conv0 = Conv(filter + filter * 0, filter, 3, 1, None, act=act)
-        self.conv1 = Conv(filter + filter * 1, filter, 3, 1, None, act=act)
-        self.conv2 = Conv(filter + filter * 2, filter, 3, 1, None, act=act)
-        self.conv3 = Conv(filter + filter * 3, filter, 3, 1, None, act=act)
-        self.conv = Conv(filter, out_channel, 3, 1, None, act=False)
+        self.conv0 = Conv(filter + filter * 0, filter, kernel_size, 1, None, act=act)
+        self.conv1 = Conv(filter + filter * 1, filter, kernel_size, 1, None, act=act)
+        self.conv2 = Conv(filter + filter * 2, filter, kernel_size, 1, None, act=act)
+        self.conv3 = Conv(filter + filter * 3, filter, kernel_size, 1, None, act=act)
+        self.conv = Conv(filter, out_channel, kernel_size, 1, None, act=False)
 
     def forward(self, inputs):
         output0 = self.conv0(inputs)
@@ -235,12 +235,12 @@ class RRDB(nn.Module):
             else:
                 act = nn.PReLU()
 
-        self.conv0 = Conv(in_channel, hidden_channel, kernel, 1, None, act=act)
+        self.conv0 = Conv(in_channel, hidden_channel, 5, 1, None, act=act)
         rdbs = []
         for x in range(3):
-            rdbs.append(RDB(hidden_channel, hidden_channel, act, add_rate=add_rate / 2))
+            rdbs.append(RDB(hidden_channel, hidden_channel, kernel, act, add_rate=add_rate))
         self.RDB = nn.Sequential(*rdbs)
-        self.conv1 = Conv(hidden_channel, out_channel, kernel, 1, None, act=False)
+        self.conv1 = Conv(hidden_channel, out_channel, 5, 1, None, act=False)
         self.add_rate = add_rate
 
     def forward(self, inputs: torch.Tensor):
@@ -518,8 +518,8 @@ class ResNet(nn.Module):
 
         self.conv0 = nn.Sequential(Conv(3, 64, 9, act=False))
         residual = [RRDB(64, 64,
-                         72, 3,
-                         act=nn.PReLU(), add_rate=0.5) for _ in range(num_block_resnet)]
+                         32, 3,
+                         act=nn.PReLU(), add_rate=0.25) for _ in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
@@ -639,22 +639,13 @@ class Model(nn.Module):
             p_bar.set_description_str(f"fusing {m.__class__.__name__}")
             if isinstance(m, Conv):
                 m.defuseforward()
-                conv = nn.Conv2d(m.in_channels,
-                                 m.out_channels,
-                                 kernel_size=m.kernel_size,
-                                 stride=m.stride,
-                                 padding=m.padding,
-                                 groups=m.groups,
-                                 bias=False)
-                m.weight = conv.weight
-                m.bias = conv.bias
         return self
 
 
 if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.jit.enable_onednn_fusion(True)
-    model = Model(SRGAN(4))
+    model = Model(SRGAN(23))
     # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
     # ckpt = torch.load("../gen_checkpoint.pt", "cpu")
     # model.net.load_state_dict(ckpt['gen_net'])

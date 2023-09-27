@@ -43,7 +43,7 @@ def train(model: any, ema: ModelEMA, dataloader, compute_loss: MSELoss, optimize
 
     pbar = tqdm(dataloader, total=len(dataloader))
     for idx, (hr_images, lr_images) in enumerate(pbar):
-        hr_images, lr_images = hr_images.to(device), lr_images.to(device)
+        hr_images, lr_images = hr_images.to(device, non_blocking=True), lr_images.to(device, non_blocking=True)
         for _ in range(1):
             optimizer.zero_grad()
             with autocast(device_type=device.type if device.type == 'cuda' else 'cpu',
@@ -79,7 +79,7 @@ def train_srgan(gen_net: SRGAN, ema: ModelEMA, dis_net: Discriminator, dataloade
     ema.ema.to(device)
     pbar = tqdm(dataloader, total=len(dataloader))
     for idx, (hr_images, lr_images) in enumerate(pbar):
-        hr_images, lr_images = hr_images.to(device), lr_images.to(device)
+        hr_images, lr_images = hr_images.to(device, non_blocking=True), lr_images.to(device, non_blocking=True)
         for x in range(1):
             for pa in dis_net.parameters():
                 pa.requires_grad = False
