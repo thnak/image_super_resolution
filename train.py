@@ -88,15 +88,16 @@ def train_srgan(gen_net: SRGAN, ema: ModelEMA, dis_net: Discriminator, dataloade
                       enabled=device.type == 'cuda'):
             sr_images = gen_net(lr_images)
             sr_discriminated = dis_net(sr_images)
-            perceptual_loss, adversarial_loss = compute_loss.calc_contentLoss(sr_images, hr_images, sr_discriminated)
+            perceptual_loss, adversarial_loss, content_loss = compute_loss.calc_contentLoss(sr_images, hr_images, sr_discriminated)
         optimizer_g.zero_grad()
         gradscaler_gen.scale(perceptual_loss).backward()
         gradscaler_gen.unscale_(optimizer_g)
         clip_grad_norm_(gen_net.parameters(), 10)
         gradscaler_gen.step(optimizer_g)
         gradscaler_gen.update()
-        loss_g.append(perceptual_loss.item())
+        loss_g.append(content_loss.item())
         schedule_g.step()
+        ema.update(gen_net)
         loss_adv.append(adversarial_loss.item())
 
         with autocast(device_type=autocast_device,
@@ -232,7 +233,7 @@ if __name__ == '__main__':
             ema = ModelEMA(model)
             model.to(device)
             compute_loss = nn.MSELoss()
-            optimizer = torch.optim.Adam(params=model.parameters(), lr=lr, betas=(0.9, 0.999), eps=0.0001,
+            optimizer = torch.optim.Adam(params=model.parameters(), lr=lr, betas=(0.9, 0.999),
                                          weight_decay=weight_decay)
 
             schedule = LinearLR(optimizer, start_factor=1, end_factor=opt.lr2,
@@ -279,9 +280,9 @@ if __name__ == '__main__':
             for x in dis_net.parameters():
                 x.requires_grad = True
 
-            optimizer_g = torch.optim.Adam(params=gen_net.parameters(), lr=lr, betas=(0.9, 0.999), eps=0.0001,
+            optimizer_g = torch.optim.Adam(params=gen_net.parameters(), lr=lr, betas=(0.9, 0.999),
                                            weight_decay=weight_decay)
-            optimizer_d = torch.optim.Adam(params=dis_net.parameters(), lr=lr, betas=(0.9, 0.999), eps=0.0001,
+            optimizer_d = torch.optim.Adam(params=dis_net.parameters(), lr=lr, betas=(0.9, 0.999),
                                            weight_decay=weight_decay)
             schedule_g = LinearLR(optimizer_g, start_factor=1, end_factor=opt.lr2,
                                   total_iters=epochs * len(dataloader))
@@ -297,8 +298,8 @@ if __name__ == '__main__':
                 if gen_checkpoints.is_file():
                     print(f"Train: load state dict from {gen_checkpoints.as_posix()}")
                     ckpt = torch.load(gen_checkpoints.as_posix(), "cpu")
-                    gen_net.load_state_dict(intersect_dicts(ckpt['ema'], gen_net.state_dict()), strict=False)
-                    dis_net.load_state_dict(intersect_dicts(ckpt['dis_net'], dis_net.state_dict()), strict=False)
+                    gen_net.load_state_dict(intersect_dicts(ckpt['gen_net'].float().state_dict(), gen_net.state_dict()), strict=False)
+                    dis_net.load_state_dict(intersect_dicts(ckpt['dis_net'].float().state_dict(), dis_net.state_dict()), strict=False)
                     optimizer_g.load_state_dict(ckpt['optimizer_g'])
                     optimizer_d.load_state_dict(ckpt['optimizer_d'])
                     scaler_gen.load_state_dict(ckpt['scaler_res'])

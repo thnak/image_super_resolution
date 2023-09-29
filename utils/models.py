@@ -197,8 +197,7 @@ class RDB(nn.Module):
         output3 = self.conv3(torch.cat([inputs, output0, output1, output2], 1))
         output3 = torch.cat([inputs, output0, output1, output2, output3], 1)
         output3 = self.conv(output3)
-        output3 = output3 * self.add_rate + inputs
-        return output3
+        return output3 * self.add_rate + inputs
 
 
 class RDB_PixelShuffle(nn.Module):
@@ -228,9 +227,10 @@ class RDB_PixelShuffle(nn.Module):
 class RRDB(nn.Module):
     """Residual in Residual Dense Block"""
 
-    def __init__(self, in_channel: int, out_channel: int, hidden_channel: int, kernel: any, act: any, add_rate=0.2):
+    def __init__(self, filters: int, kernel: any, act: any, add_rate=0.2):
         super().__init__()
         assert 0 < add_rate <= 1, f"add must be in range (0, 1]"
+        hidden_channel = filters // 2
         if isinstance(act, nn.PReLU):
             if act.num_parameters != 1:
                 act = nn.PReLU(hidden_channel)
@@ -238,8 +238,7 @@ class RRDB(nn.Module):
                 act = nn.PReLU()
         forward_net = []
         for _ in range(3):
-            forward_net.append(RDB(in_channel, hidden_channel, kernel, act, add_rate=add_rate))
-        forward_net.append(Conv(in_channel, out_channel, 5, 1, None, act=act))
+            forward_net.append(RDB(filters, hidden_channel, kernel, act, add_rate=add_rate))
         self.net = nn.Sequential(*forward_net)
         self.add_rate = add_rate
 
@@ -342,10 +341,8 @@ class ConvertTanh2Norm(nn.Module):
         self.register_buffer("std", std)
 
     def forward(self, inputs: torch.Tensor):
-        inputs = (inputs + 1.) / 2.
-        inputs -= self.mean
-        inputs /= self.std
-        return inputs
+        out = (inputs + 1.) / 2.
+        return (out - self.mean) / self.std
 
 
 class Tanh2PIL(nn.Module):
@@ -515,8 +512,7 @@ class ResNet(nn.Module):
         super().__init__()
 
         self.conv0 = nn.Sequential(Conv(3, 64, 9, act=False))
-        residual = [RRDB(64, 64,
-                         32, 3,
+        residual = [RRDB(64, 3,
                          act=nn.LeakyReLU(0.2), add_rate=0.2) for _ in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
@@ -552,10 +548,6 @@ class SRGAN(nn.Module):
         super().__init__()
         self.res_net = ResNet(resnet)
         self.tanh_to_norm = ConvertTanh2Norm(mean=mean, std=std)
-
-        for x in self.modules():
-            if hasattr(x, "inplace"):
-                x.inplace = True
 
     def init_weight(self, pretrained):
         ckpt = torch.load(pretrained, "cpu")
@@ -654,7 +646,7 @@ if __name__ == '__main__':
     model = Model(SRGAN(16))
     # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
     ckpt = torch.load("../res_res_deep1.pt", "cpu")
-    model.net.res_net.load_state_dict(ckpt['gen_net'].state_dict())
+    # model.net.res_net.load_state_dict(ckpt['gen_net'].state_dict())
     model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False

@@ -58,7 +58,7 @@ class Normalize(Module):
         self.register_buffer("max_pixel_value", torch.tensor(max_pixel_value))
 
     def forward(self, inputs: torch.Tensor):
-        if not inputs.dtype.is_floating_point:
+        if inputs.dtype == torch.uint8:
             inputs = inputs.to(dtype=self.max_pixel_value.dtype)
             inputs /= self.max_pixel_value
         inputs -= self.mean
@@ -93,8 +93,9 @@ class PIL_to_tanh(Module):
         self.register_buffer("max_pixel_value", torch.tensor(max_pixel_value))
 
     def forward(self, inputs):
-        inputs = inputs.to(dtype=self.max_pixel_value.dtype)
-        inputs /= self.max_pixel_value
+        if inputs.dtype == torch.uint8:
+            inputs = inputs.to(dtype=self.max_pixel_value.dtype)
+            inputs /= self.max_pixel_value
         return 2. * inputs - 1
 
 
@@ -289,7 +290,6 @@ class SR_dataset(Dataset):
 
     def __len__(self):
         return len(self.samples)
-
 
 class Noisy_dataset(Dataset):
     mean = [0.485, 0.456, 0.406]
