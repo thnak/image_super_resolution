@@ -8,7 +8,7 @@ from pathlib import Path
 
 from torch.cuda.amp import GradScaler
 from torch.nn import MSELoss
-from torch import autocast, nn
+from torch import nn, autocast
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import Adam, SGD
 from torch.optim.lr_scheduler import LambdaLR, LinearLR
@@ -46,8 +46,7 @@ def train(model: any, ema: ModelEMA, dataloader, compute_loss: MSELoss, optimize
         hr_images, lr_images = hr_images.to(device, non_blocking=True), lr_images.to(device, non_blocking=True)
         for _ in range(1):
             optimizer.zero_grad()
-            with autocast(device_type=device.type if device.type == 'cuda' else 'cpu',
-                          enabled=device.type == 'cuda'):
+            with autocast(enabled=device.type == 'cuda'):
                 preds = model(lr_images)
                 loss = compute_loss(preds, hr_images)
             gradscaler.scale(loss).backward()
@@ -157,13 +156,12 @@ if __name__ == '__main__':
     res_checkpoints = work_dir / res_checkpoints
     gen_checkpoints = work_dir / gen_checkpoints
     denoise_checkpoints = work_dir / denoise_checkpoints
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     if opt.dml:
         import torch_directml
 
         device = torch_directml.device(0)
     else:
-        device = torch.device(device)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     lr = opt.lr
     epochs = opt.epochs
     weight_decay = opt.weight_decay
@@ -220,6 +218,7 @@ if __name__ == '__main__':
         if opt.resnet:
             model = ResNet(opt.rs_deep)
             ema = ModelEMA(model)
+            model.to(device)
             compute_loss = nn.L1Loss() if opt.L1_loss else nn.MSELoss()
             optimizer = torch.optim.Adam(params=model.parameters(), lr=lr, betas=(0.9, 0.999), eps=0.0001,
                                          weight_decay=weight_decay)
@@ -227,7 +226,6 @@ if __name__ == '__main__':
             schedule = LinearLR(optimizer, start_factor=1, end_factor=opt.lr2,
                                 total_iters=epochs * len(dataloader))
             start_epoch = 0
-            model.to(device)
             n_P = sum([x.numel() for x in model.parameters()])
             n_g = sum(x.numel() for x in model.parameters() if x.requires_grad)  # number gradients
             print(f"{prefix} {epochs} epochs, {n_P:,} parameters, {n_g:,} gradients")
@@ -248,7 +246,7 @@ if __name__ == '__main__':
 
             for epoch in range(start_epoch, epochs):
                 loss = train(model, ema, dataloader, compute_loss, optimizer, scaler, schedule, epoch)
-                torch.save({"gen_net": model.state_dict(),
+                torch.save({"gen_net": model.half().state_dict(),
                             "optimizer": optimizer.state_dict(),
                             "epoch": epoch,
                             "mean": dataset.mean,
@@ -281,7 +279,7 @@ if __name__ == '__main__':
                 if gen_checkpoints.is_file():
                     print(f"Train: load state dict from {gen_checkpoints.as_posix()}")
                     ckpt = torch.load(gen_checkpoints.as_posix(), "cpu")
-                    gen_net.load_state_dict(intersect_dicts(ckpt['gen_net'], gen_net.state_dict()))
+                    gen_net.load_state_dict(intersect_dicts(ckpt['ema'], gen_net.state_dict()))
                     dis_net.load_state_dict(intersect_dicts(ckpt['dis_net'], dis_net.state_dict()))
                     optimizer_g.load_state_dict(ckpt['optimizer_g'])
                     optimizer_d.load_state_dict(ckpt['optimizer_d'])
@@ -295,12 +293,12 @@ if __name__ == '__main__':
                     del ckpt
                 else:
                     if res_checkpoints.is_file():
-                        gen_net.net.load_state_dict(torch.load(res_checkpoints, "cpu")['gen_net'])
+                        gen_net.net.load_state_dict(torch.load(res_checkpoints, "cpu")['gen_net'].float())
             else:
                 print(f"loaded from pretrained of resnet")
-                gen_net.net.load_state_dict(torch.load(res_checkpoints, "cpu")['gen_net'])
+                gen_net.net.load_state_dict(torch.load(res_checkpoints, "cpu")['ema'])
 
-            compute_loss = gen_loss(mse=not opt.L1_loss)
+            compute_loss = gen_loss(device=device)
             gen_net.to(device)
             dis_net.to(device)
             n_P = sum([x.numel() for x in gen_net.parameters()])
@@ -314,8 +312,8 @@ if __name__ == '__main__':
                                    optimizer_g, optimizer_d, (scaler, scaler_gan),
                                    (schedule_g, schedule_d), x)
 
-                torch.save({'gen_net': gen_net.state_dict(),
-                            "dis_net": dis_net.state_dict(),
+                torch.save({'gen_net': gen_net.half().state_dict(),
+                            "dis_net": dis_net.half().state_dict(),
                             "optimizer_g": optimizer_g.state_dict(),
                             "optimizer_d": optimizer_d.state_dict(),
                             "mean": dataset.mean, "std": dataset.std,

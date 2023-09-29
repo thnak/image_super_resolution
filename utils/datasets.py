@@ -1,4 +1,5 @@
 import random
+from typing import Union
 
 import numpy as np
 import torch
@@ -11,6 +12,7 @@ import json
 from pathlib import Path
 from time import sleep
 from tqdm import tqdm
+from PIL import Image
 
 from utils.general import ground_up, convert_image_to_jpg
 
@@ -205,6 +207,16 @@ class ColorJitter(Module):
         return inputs
 
 
+def image_reader(image_dir: Union[Path, str]):
+    """image to [0, 1] tensor"""
+    image = Image.open(image_dir)
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    result = T.to_tensor(image)
+    image.close()
+    return result
+
+
 class SR_dataset(Dataset):
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
@@ -222,8 +234,9 @@ class SR_dataset(Dataset):
         if calculateNorm:
             self.calculateNormValues()
         self.transform_lr = Compose([Random_low_rs(target_size, scales_factor),
-                                     Normalize(mean=self.mean, std=self.std)])
-        self.transform_hr = PIL_to_tanh()  # - > tanh
+                                     Normalize(mean=self.mean, std=self.std,
+                                               max_pixel_value=1.)])
+        self.transform_hr = PIL_to_tanh(max_pixel_value=1.0)  # - > tanh
 
     def calculateNormValues(self):
         prefix = ""
@@ -266,24 +279,11 @@ class SR_dataset(Dataset):
 
     def set_transform_hr(self):
         """set transform for srgen"""
-        self.transform_hr = Normalize(self.mean, self.std)
+        self.transform_hr = Normalize(self.mean, self.std, max_pixel_value=1.0)
         return self
 
     def __getitem__(self, item):
-        try:
-            try:
-                image = read_image(self.samples[item], ImageReadMode.RGB)  # CHW
-            except Exception as ex:
-                print(f"error {ex}")
-                converted_image = convert_image_to_jpg(self.samples[item]).as_posix()
-                sleep(0.1)
-                self.samples[item] = converted_image
-                with open(self.json_path.as_posix(), "w") as fi:
-                    fi.write(json.dumps(self.samples))
-                image = read_image(converted_image, ImageReadMode.RGB)  # CHW
-        except:
-            image = read_image(self.samples[item + 1], ImageReadMode.RGB)  # CHW
-
+        image = image_reader(self.samples[item])
         image = self.ran_position(image)
         return self.transform_hr(image), self.transform_lr(image)
 

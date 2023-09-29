@@ -49,7 +49,8 @@ class FullyConnected(nn.Module):
         super().__init__()
         act = fix_problem_with_reuse_activation_funtion(act)
         if isinstance(act, nn.PReLU):
-            act = nn.PReLU(out_channel)
+            if act.num_parameters != 1:
+                act = nn.PReLU(out_channel)
         self.linear = nn.Linear(in_channel, out_channel, bias=False)
         self.bn = nn.BatchNorm1d(out_channel)
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
@@ -196,7 +197,8 @@ class RDB(nn.Module):
         output3 = self.conv3(torch.cat([inputs, output0, output1, output2], 1))
         output3 = torch.cat([inputs, output0, output1, output2, output3], 1)
         output3 = self.conv(output3)
-        return output3 * self.add_rate + inputs
+        output3 = output3 * self.add_rate + inputs
+        return output3
 
 
 class RDB_PixelShuffle(nn.Module):
@@ -234,19 +236,15 @@ class RRDB(nn.Module):
                 act = nn.PReLU(hidden_channel)
             else:
                 act = nn.PReLU()
-
-        self.conv0 = Conv(in_channel, hidden_channel, 5, 1, None, act=act)
-        rdbs = []
-        for x in range(3):
-            rdbs.append(RDB(hidden_channel, hidden_channel, kernel, act, add_rate=add_rate))
-        self.RDB = nn.Sequential(*rdbs)
-        self.conv1 = Conv(hidden_channel, out_channel, 5, 1, None, act=False)
+        forward_net = []
+        for _ in range(3):
+            forward_net.append(RDB(in_channel, hidden_channel, kernel, act, add_rate=add_rate))
+        forward_net.append(Conv(in_channel, out_channel, 1, 1, None, act=act))
+        self.net = nn.Sequential(*forward_net)
         self.add_rate = add_rate
 
     def forward(self, inputs: torch.Tensor):
-        outputs = self.conv0(inputs)
-        outputs = self.RDB(outputs)
-        return inputs + self.conv1(outputs) * self.add_rate
+        return inputs + self.net(inputs) * self.add_rate
 
 
 class elan(nn.Module):
@@ -463,14 +461,14 @@ class Discriminator(nn.Module):
         for i in range(n_blocks):
             out_channels = (n_channels if i == 0 else in_channels * 2) if i % 2 == 0 else in_channels
             conv_blocks.append(Conv(in_channels, out_channels, kernel_size, 1 if i % 2 == 0 else 2, None,
-                                    act=nn.LeakyReLU()))
+                                    act=nn.LeakyReLU(0.2)))
             in_channels = out_channels
         self.conv_blocks = nn.Sequential(*conv_blocks)
 
         # An adaptive pool layer that resizes it to a standard size
         # For the default input size of 96 and 8 convolutional blocks, this will have no effect
         self.adaptive_pool = nn.AdaptiveAvgPool2d((6, 6))
-        self.fc1 = FullyConnected(out_channels * 6 * 6, fc_size, act=nn.LeakyReLU())
+        self.fc1 = FullyConnected(out_channels * 6 * 6, fc_size, act=nn.LeakyReLU(0.2))
         self.fc2 = nn.Linear(fc_size, 1)
 
         for x in self.modules():
@@ -519,13 +517,13 @@ class ResNet(nn.Module):
         self.conv0 = nn.Sequential(Conv(3, 64, 9, act=False))
         residual = [RRDB(64, 64,
                          32, 3,
-                         act=nn.PReLU(), add_rate=0.25) for _ in range(num_block_resnet)]
+                         act=nn.LeakyReLU(0.2), add_rate=0.25) for _ in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
         scaler = [Scaler(64, 64,
                          2, 3,
-                         nn.PReLU()) for _ in range(2)]
+                         nn.LeakyReLU(0.2)) for _ in range(2)]
         self.scaler = nn.Sequential(*scaler)
         self.conv2 = Conv(64, 3, 9, 1, act=nn.Tanh())
 
@@ -645,11 +643,11 @@ class Model(nn.Module):
 if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.jit.enable_onednn_fusion(True)
-    model = Model(SRGAN(23))
+    model = Model(ResNet(23))
     # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
-    # ckpt = torch.load("../gen_checkpoint.pt", "cpu")
-    # model.net.load_state_dict(ckpt['gen_net'])
-    # model.init_normalize(ckpt['mean'], ckpt['std'])
+    ckpt = torch.load("../res_checkpoint.pt", "cpu")
+    model.net.load_state_dict(ckpt['gen_net'])
+    model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False
     model.eval().fuse()

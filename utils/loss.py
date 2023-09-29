@@ -8,7 +8,7 @@ class gen_loss:
         self.vgg_net = TruncatedVGG19(vgg_i, vgg_j).eval().to(device)
         for x in self.vgg_net.parameters():
             x.requires_grad = False
-        self.mse = nn.MSELoss() if mse else nn.L1Loss()
+        self.mse = nn.MSELoss()
         self.bce = nn.BCEWithLogitsLoss()
         self.beta = beta
 
