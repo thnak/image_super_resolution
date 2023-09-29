@@ -239,7 +239,7 @@ class RRDB(nn.Module):
         forward_net = []
         for _ in range(3):
             forward_net.append(RDB(in_channel, hidden_channel, kernel, act, add_rate=add_rate))
-        forward_net.append(Conv(in_channel, out_channel, 1, 1, None, act=act))
+        forward_net.append(Conv(in_channel, out_channel, 5, 1, None, act=act))
         self.net = nn.Sequential(*forward_net)
         self.add_rate = add_rate
 
@@ -550,11 +550,19 @@ class SRGAN(nn.Module):
 
     def __init__(self, resnet, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
         super().__init__()
-        self.net = ResNet(resnet)
+        self.res_net = ResNet(resnet)
         self.tanh_to_norm = ConvertTanh2Norm(mean=mean, std=std)
 
+        for x in self.modules():
+            if hasattr(x, "inplace"):
+                x.inplace = True
+
+    def init_weight(self, pretrained):
+        ckpt = torch.load(pretrained, "cpu")
+        self.res_net.load_state_dict(ckpt['gen_net'].float().state_dict())
+
     def forward(self, inputs: torch.Tensor):
-        inputs = self.net(inputs)
+        inputs = self.res_net(inputs)
         if self.training:
             inputs = self.tanh_to_norm(inputs)
         return inputs

@@ -4,10 +4,9 @@ from utils.models import ConvertTanh2Norm, TruncatedVGG19
 
 
 class gen_loss:
-    def __init__(self, vgg_i=5, vgg_j=4, beta=1e-3, mse=True, device='cuda'):
-        self.vgg_net = TruncatedVGG19(vgg_i, vgg_j).eval().to(device)
-        for x in self.vgg_net.parameters():
-            x.requires_grad = False
+    def __init__(self, vgg_i=5, vgg_j=4, beta=1e-3, device='cuda'):
+        self.vgg_net = TruncatedVGG19(vgg_i, vgg_j).to(device)
+        self.vgg_net.eval()
         self.mse = nn.MSELoss()
         self.bce = nn.BCEWithLogitsLoss()
         self.beta = beta
@@ -22,5 +21,5 @@ class gen_loss:
         perceptual_loss = content_loss + self.beta * adversarial_loss
         return perceptual_loss, adversarial_loss
 
-    def calc_advLoss(self, inputs: torch.Tensor, targets: torch.Tensor):
-        return self.bce(inputs, torch.zeros_like(inputs)) + self.bce(targets, torch.ones_like(targets))
+    def calc_advLoss(self, sr_discriminated: torch.Tensor, hr_discriminated: torch.Tensor):
+        return self.bce(sr_discriminated, torch.zeros_like(sr_discriminated)) + self.bce(hr_discriminated, torch.ones_like(hr_discriminated))

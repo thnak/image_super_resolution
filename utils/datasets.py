@@ -10,7 +10,6 @@ import torchvision.transforms.functional as T
 from torchvision.io import read_image, VideoReader, ImageReadMode
 import json
 from pathlib import Path
-from time import sleep
 from tqdm import tqdm
 from PIL import Image
 
@@ -59,8 +58,9 @@ class Normalize(Module):
         self.register_buffer("max_pixel_value", torch.tensor(max_pixel_value))
 
     def forward(self, inputs: torch.Tensor):
-        inputs = inputs.to(dtype=self.max_pixel_value.dtype)
-        inputs /= self.max_pixel_value
+        if inputs.dtype.is_floating_point:
+            inputs = inputs.to(dtype=self.max_pixel_value.dtype)
+            inputs /= self.max_pixel_value
         inputs -= self.mean
         inputs /= self.std
         return inputs
@@ -279,7 +279,7 @@ class SR_dataset(Dataset):
 
     def set_transform_hr(self):
         """set transform for srgen"""
-        self.transform_hr = Normalize(self.mean, self.std, max_pixel_value=1.0)
+        self.transform_hr = Normalize(self.mean, self.std, max_pixel_value=1.)
         return self
 
     def __getitem__(self, item):
