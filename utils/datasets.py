@@ -58,7 +58,7 @@ class Normalize(Module):
         self.register_buffer("max_pixel_value", torch.tensor(max_pixel_value))
 
     def forward(self, inputs: torch.Tensor):
-        if inputs.dtype.is_floating_point:
+        if not inputs.dtype.is_floating_point:
             inputs = inputs.to(dtype=self.max_pixel_value.dtype)
             inputs /= self.max_pixel_value
         inputs -= self.mean

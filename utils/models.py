@@ -517,7 +517,7 @@ class ResNet(nn.Module):
         self.conv0 = nn.Sequential(Conv(3, 64, 9, act=False))
         residual = [RRDB(64, 64,
                          32, 3,
-                         act=nn.LeakyReLU(0.2), add_rate=0.25) for _ in range(num_block_resnet)]
+                         act=nn.LeakyReLU(0.2), add_rate=0.2) for _ in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
@@ -525,7 +525,7 @@ class ResNet(nn.Module):
                          2, 3,
                          nn.LeakyReLU(0.2)) for _ in range(2)]
         self.scaler = nn.Sequential(*scaler)
-        self.conv2 = Conv(64, 3, 9, 1, act=nn.Tanh())
+        self.conv2 = ConvWithoutBN(64, 3, 9, 1, act=nn.Tanh())
 
         for x in self.modules():
             if hasattr(x, "inplace"):
@@ -534,7 +534,7 @@ class ResNet(nn.Module):
         for module in self.modules():
             if isinstance(module, nn.Conv2d):
                 nn.init.kaiming_normal_(module.weight)
-                module.weight.data *= 2
+                module.weight.data *= 0.2
                 if module.bias is not None:
                     nn.init.constant_(module.bias, 0)
 
@@ -651,10 +651,10 @@ class Model(nn.Module):
 if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.jit.enable_onednn_fusion(True)
-    model = Model(ResNet(23))
+    model = Model(SRGAN(16))
     # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
-    ckpt = torch.load("../res_checkpoint.pt", "cpu")
-    model.net.load_state_dict(ckpt['gen_net'])
+    ckpt = torch.load("../res_res_deep1.pt", "cpu")
+    model.net.res_net.load_state_dict(ckpt['gen_net'].state_dict())
     model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False
@@ -668,7 +668,7 @@ if __name__ == '__main__':
     device = "cpu"
 
     model.to(device)
-    feed = torch.zeros([1, 3, 96, 96], device=device)
+    feed = torch.zeros([1, 3, 96, 96], dtype=torch.uint8, device=device)
 
     if torch.cuda.is_available():
         model.half()
