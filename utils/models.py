@@ -143,9 +143,8 @@ class ResidualBlock1(nn.Module):
     def __init__(self, in_channel: int, out_channel: int, hidden_channel: int, kernel: any, act: any):
         super(ResidualBlock1, self).__init__()
         self.m = nn.Sequential(
-            Conv(in_channel, hidden_channel, 1, 1, None, act=act),
-            Conv(hidden_channel, hidden_channel, kernel, 1, None, act=act),
-            Conv(hidden_channel, out_channel, 1, 1, None, act=False))
+            Conv(in_channel, hidden_channel, kernel, 1, None, act=act),
+            Conv(hidden_channel, out_channel, kernel, 1, None, act=False))
 
     def forward(self, inputs: torch.Tensor):
         return inputs + self.m(inputs)
@@ -196,8 +195,7 @@ class RDB(nn.Module):
         output2 = self.conv2(torch.cat([inputs, output0, output1], 1))
         output3 = self.conv3(torch.cat([inputs, output0, output1, output2], 1))
         output3 = torch.cat([inputs, output0, output1, output2, output3], 1)
-        output3 = self.conv(output3)
-        return output3 * self.add_rate + inputs
+        return torch.add(torch.mul(self.conv(output3), self.add_rate), inputs)
 
 
 class RDB_PixelShuffle(nn.Module):
@@ -243,7 +241,7 @@ class RRDB(nn.Module):
         self.add_rate = add_rate
 
     def forward(self, inputs: torch.Tensor):
-        return inputs + self.net(inputs) * self.add_rate
+        return torch.add(torch.mul(self.net(inputs), self.add_rate), inputs)
 
 
 class elan(nn.Module):
@@ -495,7 +493,7 @@ class Scaler(nn.Module):
         if isinstance(act, nn.PReLU):
             if act.num_parameters != 1:
                 act = nn.PReLU(out_channel // (scale_factor * 2))
-        scaler = [Conv(in_channel, out_channel, kernel_size, 1, None, act=False),
+        scaler = [ConvWithoutBN(in_channel, out_channel, kernel_size, 1, None, act=False),
                   nn.PixelShuffle(scale_factor), act]
 
         self.net = nn.Sequential(*scaler)
@@ -511,9 +509,10 @@ class ResNet(nn.Module):
     def __init__(self, num_block_resnet=16):
         super().__init__()
 
-        self.conv0 = nn.Sequential(Conv(3, 64, 9, act=False))
+        self.conv0 = nn.Sequential(ConvWithoutBN(3, 64, 9, act=nn.LeakyReLU(0.2)))
         residual = [RRDB(64, 3,
                          act=nn.LeakyReLU(0.2), add_rate=0.2) for _ in range(num_block_resnet)]
+        # residual = [ResidualBlock1(64, 64, 64, 3, nn.LeakyReLU(0.2)) for _ in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
@@ -544,10 +543,9 @@ class ResNet(nn.Module):
 
 class SRGAN(nn.Module):
 
-    def __init__(self, resnet, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
+    def __init__(self, resnet):
         super().__init__()
         self.res_net = ResNet(resnet)
-        self.tanh_to_norm = ConvertTanh2Norm(mean=mean, std=std)
 
     def init_weight(self, pretrained):
         ckpt = torch.load(pretrained, "cpu")
@@ -555,8 +553,6 @@ class SRGAN(nn.Module):
 
     def forward(self, inputs: torch.Tensor):
         inputs = self.res_net(inputs)
-        if self.training:
-            inputs = self.tanh_to_norm(inputs)
         return inputs
 
 
@@ -643,10 +639,10 @@ class Model(nn.Module):
 if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.jit.enable_onednn_fusion(True)
-    model = Model(SRGAN(16))
+    model = Model(ResNet(23))
     # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
-    ckpt = torch.load("../res_res_deep1.pt", "cpu")
-    # model.net.res_net.load_state_dict(ckpt['gen_net'].state_dict())
+    ckpt = torch.load("../res_checkpoint.pt", "cpu")
+    model.net.load_state_dict(ckpt['gen_net'].state_dict())
     model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False

@@ -6,8 +6,8 @@ from utils.models import ConvertTanh2Norm, TruncatedVGG19
 class gen_loss:
     def __init__(self, vgg_i=5, vgg_j=4, beta=1e-3, device='cuda'):
         self.vgg_net = TruncatedVGG19(vgg_i, vgg_j).to(device)
-        for x in self.vgg_net.parameters():
-            x.requires_grad = False
+        # for x in self.vgg_net.parameters():
+        #     x.requires_grad = False
         self.vgg_net.eval()
         self.mse = nn.MSELoss()
         self.bce = nn.BCEWithLogitsLoss()

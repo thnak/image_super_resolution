@@ -16,7 +16,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch.optim import Adam, SGD
 from torch.optim.lr_scheduler import LambdaLR, LinearLR
 from tqdm import tqdm
-from utils.models import ResNet, SRGAN, Discriminator, Denoise, ModelEMA
+from utils.models import ResNet, SRGAN, Discriminator, Denoise, ModelEMA, ConvertTanh2Norm
 from utils.general import intersect_dicts
 from utils.datasets import SR_dataset, init_dataloader, Noisy_dataset
 from utils.loss import gen_loss
@@ -65,7 +65,7 @@ def train(model: any, ema: ModelEMA, dataloader, compute_loss: MSELoss, optimize
     return losses
 
 
-def train_srgan(gen_net: SRGAN, ema: ModelEMA, dis_net: Discriminator, dataloader,
+def train_srgan(gen_net: SRGAN, tanh2norm: ConvertTanh2Norm, ema: ModelEMA, dis_net: Discriminator, dataloader,
                 compute_loss: gen_loss,
                 optimizer_g: Adam | SGD,
                 optimizer_d: Adam | SGD,
@@ -84,11 +84,14 @@ def train_srgan(gen_net: SRGAN, ema: ModelEMA, dis_net: Discriminator, dataloade
     pbar = tqdm(dataloader, total=len(dataloader))
     for idx, (hr_images, lr_images) in enumerate(pbar):
         hr_images, lr_images = hr_images.to(device, non_blocking=True), lr_images.to(device, non_blocking=True)
+        # for x in dis_net.parameters():
+        #     x.requires_grad = False
         with autocast(device_type=autocast_device,
                       enabled=device.type == 'cuda'):
-            sr_images = gen_net(lr_images)
+            sr_images = tanh2norm(gen_net(lr_images))
             sr_discriminated = dis_net(sr_images)
-            perceptual_loss, adversarial_loss, content_loss = compute_loss.calc_contentLoss(sr_images, hr_images, sr_discriminated)
+            perceptual_loss, adversarial_loss, content_loss = compute_loss.calc_contentLoss(sr_images, hr_images,
+                                                                                            sr_discriminated)
         optimizer_g.zero_grad()
         gradscaler_gen.scale(perceptual_loss).backward()
         gradscaler_gen.unscale_(optimizer_g)
@@ -99,7 +102,8 @@ def train_srgan(gen_net: SRGAN, ema: ModelEMA, dis_net: Discriminator, dataloade
         schedule_g.step()
         ema.update(gen_net)
         loss_adv.append(adversarial_loss.item())
-
+        # for x in dis_net.parameters():
+        #     x.requires_grad = True
         with autocast(device_type=autocast_device,
                       enabled=device.type == 'cuda'):
             sr_discriminated = dis_net(sr_images.detach())
@@ -271,6 +275,7 @@ if __name__ == '__main__':
 
         else:
             gen_net = SRGAN(opt.rs_deep)
+            tanh2norm = ConvertTanh2Norm(mean=dataset.mean, std=dataset.std)
             gen_net.init_weight(pretrained=res_checkpoints.as_posix())
             dis_net = Discriminator(3, 64, 8, 1024)
             ema = ModelEMA(gen_net)
@@ -317,7 +322,7 @@ if __name__ == '__main__':
             compute_loss = gen_loss(device=device)
             gen_net.to(device)
             dis_net.to(device)
-
+            tanh2norm.to(device)
             n_P = sum([x.numel() for x in gen_net.parameters()])
             n_g = sum(x.numel() for x in gen_net.parameters() if x.requires_grad)  # number gradients
             print(f"{prefix}{n_P:,} parameters, {n_g:,} gradients")
@@ -325,7 +330,8 @@ if __name__ == '__main__':
             best_fitness = 1000
 
             for x in range(start_epoch, epochs):
-                loss = train_srgan(gen_net=gen_net, ema=ema, dis_net=dis_net, dataloader=dataloader,
+                loss = train_srgan(gen_net=gen_net, tanh2norm=tanh2norm, ema=ema,
+                                   dis_net=dis_net, dataloader=dataloader,
                                    compute_loss=compute_loss,
                                    optimizer_g=optimizer_g, optimizer_d=optimizer_d,
                                    gradscaler=(scaler_gen, scaler_dis),

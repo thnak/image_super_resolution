@@ -24,7 +24,7 @@ class Random_low_rs(Module):
         self.shape = input_shape // scale_factor
 
     def forward(self, inputs):
-        return inputs[:, ::self.scale_factor, ::self.scale_factor]
+        return T.resize(inputs, [self.shape, self.shape], InterpolationMode.BICUBIC, antialias=True)
 
 
 class Random_position(Module):
@@ -236,8 +236,8 @@ class SR_dataset(Dataset):
             self.calculateNormValues()
         self.transform_lr = Compose([Random_low_rs(target_size, scales_factor),
                                      Normalize(mean=self.mean, std=self.std,
-                                               max_pixel_value=1.)])
-        self.transform_hr = PIL_to_tanh(max_pixel_value=1.0)  # - > tanh
+                                               max_pixel_value=255.)])
+        self.transform_hr = PIL_to_tanh(max_pixel_value=255.0)  # - > tanh
 
     def calculateNormValues(self):
         prefix = ""
@@ -248,15 +248,7 @@ class SR_dataset(Dataset):
         count = 0
         corrupt = []
         for x in pbar:
-            try:
-                try:
-                    image = read_image(self.samples[x], ImageReadMode.RGB)  # CHW
-                except Exception as ex:
-                    self.samples[x] = convert_image_to_jpg(self.samples[x]).as_posix()
-                    image = read_image(self.samples[x], ImageReadMode.RGB)  # CHW
-            except:
-                corrupt.append(x)
-                continue
+            image = image_reader(self.samples[x])  # CHW
             count += image.size(1) * image.size(2)
             image = image.float()
             image /= 255.
@@ -280,7 +272,7 @@ class SR_dataset(Dataset):
 
     def set_transform_hr(self):
         """set transform for srgen"""
-        self.transform_hr = Normalize(self.mean, self.std, max_pixel_value=1.)
+        self.transform_hr = Normalize(self.mean, self.std, max_pixel_value=255.)
         return self
 
     def __getitem__(self, item):
@@ -290,6 +282,7 @@ class SR_dataset(Dataset):
 
     def __len__(self):
         return len(self.samples)
+
 
 class Noisy_dataset(Dataset):
     mean = [0.485, 0.456, 0.406]
