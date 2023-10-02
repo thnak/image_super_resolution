@@ -44,7 +44,6 @@ def train(model: any, ema: ModelEMA, dataloader, compute_loss: MSELoss, optimize
     device = next(model.parameters()).device
     ema.ema.to(device)
     autocast_device = "cuda" if torch.cuda.is_available() else "cpu"
-
     pbar = tqdm(dataloader, total=len(dataloader))
     for idx, (hr_images, lr_images) in enumerate(pbar):
         hr_images, lr_images = hr_images.to(device, non_blocking=True), lr_images.to(device, non_blocking=True)
@@ -167,7 +166,7 @@ if __name__ == '__main__':
     work_dir.mkdir(exist_ok=True)
     res_checkpoints = Path(f"res_{opt.save_name}")
     gen_checkpoints = Path(f"gen_{opt.save_name}")
-    denoise_checkpoints = Path("denoise_checkpoint.pt")
+    denoise_checkpoints = Path(f"denoise_{opt.save_name}")
     res_checkpoints = work_dir / res_checkpoints
     gen_checkpoints = work_dir / gen_checkpoints
     denoise_checkpoints = work_dir / denoise_checkpoints
@@ -192,18 +191,21 @@ if __name__ == '__main__':
 
     if opt.train_denoise:
         model = Denoise(opt.rs_deep)
+        ema = ModelEMA(model)
         model.to(device)
         for x in model.parameters():
             x.requires_grad = True
-        optimizer = torch.optim.SGD(model.parameters(), lr, momentum=momentum, weight_decay=weight_decay)
+        optimizer = torch.optim.Adam(model.parameters(), lr)
         if denoise_checkpoints.is_file():
             ckpt = torch.load(denoise_checkpoints.as_posix(), 'cpu')
-            checkpoint_state = intersect_dicts(ckpt['model'], model.state_dict())
+            print(f"load from {denoise_checkpoints.as_posix()}")
+            checkpoint_state = intersect_dicts(ckpt['gen_net'].float().state_dict(), model.state_dict())
             model.load_state_dict(checkpoint_state, strict=False)
             if len(checkpoint_state) == len(model.state_dict()):
-                optimizer.load_state_dict(ckpt['optimizer'])
-                start_epoch = ckpt['epoch'] + 1
-            optimizer_to(optimizer, device)
+                if ckpt['optimizer'] is not None:
+                    optimizer.load_state_dict(ckpt['optimizer'])
+                    start_epoch = ckpt['epoch'] + 1
+                    optimizer_to(optimizer, device)
             data_std = ckpt.get('std', None)
             data_mean = ckpt.get('mean', None)
             print(f"Loaded pre-trained {len(checkpoint_state)}/{len(model.state_dict())} model")
@@ -211,15 +213,19 @@ if __name__ == '__main__':
 
         dataset = Noisy_dataset(json_path=json_file.as_posix(), target_size=opt.shape,
                                 prefix="Train: ")
+
         dataloader = init_dataloader(dataset, batch_size=batch_size, num_worker=workers, shuffle=True)[0]
+        schedule = LinearLR(optimizer, start_factor=1, end_factor=opt.lr2,
+                            total_iters=epochs * len(dataloader))
+
         compute_loss = nn.MSELoss()
         n_p = sum([x.numel() for x in model.parameters()])
         n_g = sum([x.numel() for x in model.parameters() if x.requires_grad])
         print(f"Model: {n_p:,} parameters, {n_g:,} gradients")
         for epoch in range(start_epoch, epochs):
-            train(model, dataloader, compute_loss, optimizer, scaler_gen, epoch)
-            torch.save({'model': model.state_dict(),
-                        "optimizer": optimizer.state_dict(),
+            train(model, ema, dataloader, compute_loss, optimizer, scaler_gen, schedule, epoch)
+            torch.save({'gen_net': deepcopy(model).cpu().half(),
+                        "optimizer": optimizer.state_dict() if epoch != epochs - 1 else None,
                         "epoch": epoch,
                         "mean": dataset.mean,
                         "std": dataset.std}, denoise_checkpoints.as_posix())
@@ -254,17 +260,18 @@ if __name__ == '__main__':
                     ema.updates = ckpt['updates']
                     model.load_state_dict(checkpoint_state, strict=False)
                     if len(checkpoint_state) == len(model.state_dict()):
-                        optimizer.load_state_dict(ckpt['optimizer'])
+                        if ckpt.get("optimizer") is not None:
+                            optimizer.load_state_dict(ckpt['optimizer'])
                         scaler_gen.load_state_dict(ckpt['scaler'])
                         start_epoch = ckpt['epoch'] + 1
-                    # optimizer_to(optimizer, device)
+                        # optimizer_to(optimizer, device)
                     print(f"Loaded pre-trained {len(checkpoint_state)}/{len(model.state_dict())} model")
                     del ckpt, checkpoint_state
 
             for epoch in range(start_epoch, epochs):
                 loss = train(model, ema, dataloader, compute_loss, optimizer, scaler_gen, schedule, epoch)
                 torch.save({"gen_net": deepcopy(model).half(),
-                            "optimizer": optimizer.state_dict(),
+                            "optimizer": optimizer.state_dict() if epoch != epochs - 1 else None,
                             "epoch": epoch,
                             "mean": dataset.mean,
                             "std": dataset.std, "loss": loss,
@@ -305,15 +312,16 @@ if __name__ == '__main__':
                     ckpt = torch.load(gen_checkpoints.as_posix(), "cpu")
                     gen_net.load_state_dict(intersect_dicts(ckpt['gen_net'].float().state_dict(), gen_net.state_dict()), strict=False)
                     dis_net.load_state_dict(intersect_dicts(ckpt['dis_net'].float().state_dict(), dis_net.state_dict()), strict=False)
-                    optimizer_g.load_state_dict(ckpt['optimizer_g'])
-                    optimizer_d.load_state_dict(ckpt['optimizer_d'])
+                    if ckpt.get("optimizer_g") is not None:
+                        optimizer_g.load_state_dict(ckpt['optimizer_g'])
+                        optimizer_d.load_state_dict(ckpt['optimizer_d'])
+                        optimizer_to(optimizer_g, device)
+                        optimizer_to(optimizer_d, device)
                     scaler_gen.load_state_dict(ckpt['scaler_res'])
                     scaler_dis.load_state_dict(ckpt['scaler_gen'])
                     ema.ema.load_state_dict(ckpt['ema'])
                     ema.updates = ckpt['updates']
                     start_epoch = ckpt['epoch'] + 1
-                    optimizer_to(optimizer_g, device)
-                    optimizer_to(optimizer_d, device)
                     del ckpt
                 else:
                     if res_checkpoints.is_file():
@@ -339,8 +347,8 @@ if __name__ == '__main__':
 
                 torch.save({'gen_net': deepcopy(gen_net).half(),
                             "dis_net": deepcopy(dis_net).half(),
-                            "optimizer_g": optimizer_g.state_dict(),
-                            "optimizer_d": optimizer_d.state_dict(),
+                            "optimizer_g": optimizer_g.state_dict() if x != epochs - 1 else None,
+                            "optimizer_d": optimizer_d.state_dict() if x != epochs - 1 else None,
                             "mean": dataset.mean, "std": dataset.std,
                             "loss": loss,
                             "epoch": x,

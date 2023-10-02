@@ -111,6 +111,45 @@ class Conv(nn.Module):
             self.store_bn = nn.Identity()
 
 
+class ConvTranspose(nn.Module):
+    """Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation, dropout"""
+    store_bn = nn.Identity()
+
+    def __init__(self, c1, c2, k: any = 1, s: any = 1, p=None, g=1, d=1, act: any = True, dropout=0.):
+        super(ConvTranspose, self).__init__()
+        if isinstance(d, ACT_LIST):  # Try to be compatible with models from other repo
+            act = d
+            d = 1
+        act = fix_problem_with_reuse_activation_funtion(act)
+        if isinstance(act, nn.PReLU):
+            if act.num_parameters != 1:
+                act = nn.PReLU(c2)
+            else:
+                act = nn.PReLU()
+        assert 0 <= dropout <= 1, f"dropout rate must be 0 <= dropout <= 1, your {dropout}"
+        pad = autopad(k, p, d) if isinstance(k, int) else [autopad(k[0], p, d), autopad(k[1], p, d)]
+        self.conv = nn.ConvTranspose2d(c1, c2, k, s, pad, groups=g, dilation=d, bias=False)
+        self.bn = nn.BatchNorm2d(c2)
+        self.drop = nn.Dropout(p=dropout) if dropout > 0. else nn.Identity()
+        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
+
+    def _forward_impl(self, x):
+        return self.drop(self.act(self.bn(self.conv(x))))
+
+    def forward(self, x):
+        return self._forward_impl(x)
+
+    def fuseforward(self):
+        if isinstance(self.bn, nn.BatchNorm2d):
+            self.store_bn = self.bn
+            self.bn = nn.Identity()
+
+    def defuseforward(self):
+        if isinstance(self.bn, nn.Identity):
+            self.bn = self.store_bn
+            self.store_bn = nn.Identity()
+
+
 class ConvWithoutBN(nn.Module):
     """Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation, dropout"""
     store_bn = nn.Identity()
@@ -509,7 +548,7 @@ class ResNet(nn.Module):
     def __init__(self, num_block_resnet=16):
         super().__init__()
 
-        self.conv0 = nn.Sequential(ConvWithoutBN(3, 64, 9, act=nn.LeakyReLU(0.2)))
+        self.conv0 = nn.Sequential(Conv(3, 64, 9, act=nn.LeakyReLU(0.2)))
         residual = [RRDB(64, 3,
                          act=nn.LeakyReLU(0.2), add_rate=0.2) for _ in range(num_block_resnet)]
         # residual = [ResidualBlock1(64, 64, 64, 3, nn.LeakyReLU(0.2)) for _ in range(num_block_resnet)]
@@ -560,23 +599,39 @@ class Denoise(nn.Module):
     def __init__(self, residual_blocks):
         super().__init__()
 
-        self.conv0 = nn.Sequential(Conv(3, 64, 9, 1, act=False))
-        residual = [ResidualBlock1(64, 64,
-                                   128, 3,
-                                   act=nn.PReLU()) for x in range(residual_blocks)]
-        self.residual = nn.Sequential(*residual)
+        self.conv0 = nn.Sequential(Conv(3, 64, 9, 1, act=nn.LeakyReLU(0.2)))
+        self.residual_0 = nn.Sequential(*[ResidualBlock1(64, 64,
+                                                         64, 3,
+                                                         act=nn.LeakyReLU(0.2)) for _ in range(residual_blocks // 2)])
+        self.residual_conv0 = Conv(64, 256, 3, 2, act=nn.LeakyReLU(0.2))
+        self.residual_1 = ResidualBlock1(256, 256, 128, 3, nn.LeakyReLU(0.2))
+        self.residual_conv1 = nn.Sequential(*[nn.PixelShuffle(2), nn.LeakyReLU(0.2)])
+
+        self.residual_2 = nn.Sequential(*[ResidualBlock1(64, 64,
+                                                         64, 3,
+                                                         act=nn.LeakyReLU(0.2)) for _ in range(residual_blocks // 2)])
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
-        self.scaler = nn.Sequential(*[nn.Sequential(Scaler(64,
-                                                           64, 2, 3,
-                                                           nn.PReLU())) for x in range(2)])
-        self.conv2 = nn.Sequential(Conv(64, 32, 9, 1, act=nn.PReLU()),
-                                   Conv(32, 3, 1, 1, None, act=nn.Tanh()),
-                                   nn.AvgPool2d(2, 4, 0))
+        self.conv2 = nn.Sequential(ConvWithoutBN(64, 3, 9, 1, None, act=nn.Tanh()))
+
+        for x in self.modules():
+            if hasattr(x, "inplace"):
+                x.inplace = True
+
+        for module in self.modules():
+            if isinstance(module, nn.Conv2d):
+                nn.init.kaiming_normal_(module.weight)
+                module.weight.data *= 0.2
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
 
     def forward(self, inputs: torch.Tensor):
         inputs = self.conv0(inputs)
-        inputs = inputs + self.conv1(self.residual(inputs))
-        inputs = self.scaler(inputs)
+        residual = self.residual_0(inputs)
+        residual = self.residual_conv0(residual)
+        residual = self.residual_1(residual)
+        residual = self.residual_conv1(residual)
+        residual = self.residual_2(residual)
+        inputs = inputs + self.conv1(residual)
         inputs = self.conv2(inputs)
         return inputs
 
@@ -639,10 +694,10 @@ class Model(nn.Module):
 if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.jit.enable_onednn_fusion(True)
-    model = Model(ResNet(23))
+    model = Model(Denoise(8))
     # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
-    ckpt = torch.load("../res_checkpoint.pt", "cpu")
-    model.net.load_state_dict(ckpt['gen_net'].state_dict())
+    ckpt = torch.load("../denoise_checkpoint.pt", "cpu")
+    model.net.load_state_dict(ckpt['gen_net'].float().state_dict())
     model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False
@@ -672,8 +727,8 @@ if __name__ == '__main__':
     print(f"times: {perf_counter() - t0}")
     jit_m = torch.jit.trace(model, feed)
     torch.jit.save(jit_m, "model.pt")
-    # axe = {'images': {2: "x", 3: "x"}, "outputs": {}}
-    torch.onnx.export(model, feed, "model.onnx",
+    axe = {'images': {2: "x", 3: "x"}, "outputs": {}}
+    torch.onnx.export(model, feed, "model.onnx", dynamic_axes=axe,
                       input_names=["images"], output_names=["outputs"])
     import onnx
     from onnxsim import simplify

@@ -1,6 +1,7 @@
 import random
 from typing import Union
 
+import cv2
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -24,7 +25,9 @@ class Random_low_rs(Module):
         self.shape = input_shape // scale_factor
 
     def forward(self, inputs):
-        return T.resize(inputs, [self.shape, self.shape], InterpolationMode.BICUBIC, antialias=True)
+        ran = random.random()
+        inter = InterpolationMode.BICUBIC if ran < 0.5 else InterpolationMode.BILINEAR
+        return T.resize(inputs, [self.shape, self.shape], inter, antialias=True)
 
 
 class Random_position(Module):
@@ -96,7 +99,7 @@ class PIL_to_tanh(Module):
         if inputs.dtype == torch.uint8:
             inputs = inputs.to(dtype=self.max_pixel_value.dtype)
             inputs /= self.max_pixel_value
-        return 2. * inputs - 1
+        return 2. * inputs - 1.
 
 
 class RGB2BGR(Module):
@@ -294,15 +297,25 @@ class Noisy_dataset(Dataset):
         with open(json_path.as_posix(), "r") as fi:
             self.samples = json.load(fi)
 
+        import albumentations
         self.target_size = target_size
-        self.ran_position = Random_position(target_size=target_size)
-        self.transform_lr = Compose([RandomNoisyImage(), Normalize(self.mean, self.std)])
-        self.transform_hr = PIL_to_tanh()
+        self.ran_position = albumentations.RandomCrop(target_size, target_size)
+        self.transform_lr = albumentations.Compose([albumentations.GaussNoise(),
+                                                    albumentations.ISONoise(),
+                                                    albumentations.ImageCompression(quality_lower=50, quality_upper=75),
+                                                    albumentations.Normalize(mean=self.mean, std=self.std)])
 
     def __getitem__(self, item):
-        image = read_image(self.samples[item], ImageReadMode.RGB)  # CHW
-        image = self.ran_position(image)
-        return self.transform_hr(image), self.transform_lr(image)
+        image = cv2.imread(self.samples[item])  # HWC
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image = image[:, :, :3]
+        image = self.ran_position(image=image)["image"]
+        hr_image = np.transpose(image.copy(), [2, 0, 1]).astype(np.float32)
+        hr_image = hr_image / 255.
+        hr_image = hr_image * 2. - 1
+        lr_image = self.transform_lr(image=image.copy())['image']
+        lr_image = np.transpose(lr_image, [2, 0, 1])
+        return torch.from_numpy(hr_image), torch.from_numpy(lr_image)
 
     def __len__(self):
         return len(self.samples)
