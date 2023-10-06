@@ -4,6 +4,7 @@ from typing import Union
 import cv2
 import numpy as np
 import torch
+import torchvision.transforms
 from torch.utils.data import Dataset, DataLoader
 from torch.nn import Module
 from torchvision.transforms import InterpolationMode, Lambda, Compose
@@ -25,8 +26,7 @@ class Random_low_rs(Module):
         self.shape = input_shape // scale_factor
 
     def forward(self, inputs):
-        ran = random.random()
-        inter = InterpolationMode.BICUBIC if ran < 0.5 else InterpolationMode.BILINEAR
+        inter = InterpolationMode.BICUBIC
         return T.resize(inputs, [self.shape, self.shape], inter, antialias=True)
 
 
@@ -238,8 +238,7 @@ class SR_dataset(Dataset):
         if calculateNorm:
             self.calculateNormValues()
         self.transform_lr = Compose([Random_low_rs(target_size, scales_factor),
-                                     Normalize(mean=self.mean, std=self.std,
-                                               max_pixel_value=255.)])
+                                     torchvision.transforms.Normalize(mean=self.mean, std=self.std, inplace=True)])
         self.transform_hr = PIL_to_tanh(max_pixel_value=255.0)  # - > tanh
 
     def calculateNormValues(self):
@@ -275,7 +274,7 @@ class SR_dataset(Dataset):
 
     def set_transform_hr(self):
         """set transform for srgen"""
-        self.transform_hr = Normalize(self.mean, self.std, max_pixel_value=255.)
+        self.transform_hr = torchvision.transforms.Normalize(mean=self.mean, std=self.std, inplace=True)
         return self
 
     def __getitem__(self, item):

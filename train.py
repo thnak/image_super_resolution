@@ -256,7 +256,7 @@ if __name__ == '__main__':
                 if res_checkpoints.is_file():
                     ckpt = torch.load(res_checkpoints.as_posix(), 'cpu')
                     checkpoint_state = intersect_dicts(ckpt['gen_net'].float().state_dict(), model.state_dict())
-                    ema.ema.load_state_dict(ckpt['ema'])
+                    # ema.ema.load_state_dict(ckpt['ema'].float().state_dict())
                     ema.updates = ckpt['updates']
                     model.load_state_dict(checkpoint_state, strict=False)
                     if len(checkpoint_state) == len(model.state_dict()):
@@ -276,7 +276,7 @@ if __name__ == '__main__':
                             "mean": dataset.mean,
                             "std": dataset.std, "loss": loss,
                             "scaler": scaler_gen.state_dict(),
-                            "ema": deepcopy(ema.ema).half().state_dict(),
+                            "ema": deepcopy(ema.ema).half(),
                             "updates": ema.updates},
                            res_checkpoints.as_posix())
 
@@ -319,7 +319,7 @@ if __name__ == '__main__':
                         optimizer_to(optimizer_d, device)
                     scaler_gen.load_state_dict(ckpt['scaler_res'])
                     scaler_dis.load_state_dict(ckpt['scaler_gen'])
-                    ema.ema.load_state_dict(ckpt['ema'])
+                    # ema.ema.load_state_dict(ckpt['ema'].float().state_dict())
                     ema.updates = ckpt['updates']
                     start_epoch = ckpt['epoch'] + 1
                     del ckpt
@@ -354,6 +354,6 @@ if __name__ == '__main__':
                             "epoch": x,
                             "scaler_gen": scaler_dis.state_dict(),
                             "scaler_res": scaler_gen.state_dict(),
-                            "ema": ema.ema.state_dict(),
+                            "ema": deepcopy(ema.ema).half(),
                             "updates": ema.updates},
                            gen_checkpoints.as_posix())

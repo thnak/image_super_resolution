@@ -554,16 +554,16 @@ class ResNet(nn.Module):
     def __init__(self, num_block_resnet=16):
         super().__init__()
 
-        self.conv0 = nn.Sequential(Conv(3, 64, 9, act=nn.LeakyReLU(0.2)))
+        self.conv0 = nn.Sequential(Conv(3, 64, 9, act=nn.PReLU()))
         residual = [RRDB(64, 3,
-                         act=nn.LeakyReLU(0.2), add_rate=0.2) for _ in range(num_block_resnet)]
+                         act=nn.PReLU(), add_rate=0.2) for _ in range(num_block_resnet)]
         # residual = [ResidualBlock1(64, 64, 64, 3, nn.LeakyReLU(0.2)) for _ in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
         scaler = [Scaler(64, 64,
                          2, 3,
-                         nn.LeakyReLU(0.2)) for _ in range(2)]
+                         nn.PReLU()) for _ in range(2)]
         self.scaler = nn.Sequential(*scaler)
         self.conv2 = ConvWithoutBN(64, 3, 9, 1, act=nn.Tanh())
 
@@ -701,16 +701,21 @@ class Model(nn.Module):
 
 
 if __name__ == '__main__':
-    model = Model(SRGAN(23))
+    model = Model(ResNet(23))
     # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
-    ckpt = torch.load("../gen_RRDB23.pt", "cpu")
-    model.net.load_state_dict(ckpt['gen_net'].float().state_dict())
+    ckpt = torch.load("../res_RRDB23.pt", "cpu")
+    loss = ckpt['loss']
+    import numpy as np
+
+    print(np.min(loss))
+    model.net.load_state_dict(ckpt['ema'])
     model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False
     model.eval().fuse()
     try:
         import torch_directml
+
         device = torch_directml.device(0)
     except Exception as ex:
         device = torch.device(0) if torch.cuda.is_available() else "cpu"
