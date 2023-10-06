@@ -494,15 +494,21 @@ class Discriminator(nn.Module):
         out_channels = 0
         for i in range(n_blocks):
             out_channels = (n_channels if i == 0 else in_channels * 2) if i % 2 == 0 else in_channels
-            conv_blocks.append(Conv(in_channels, out_channels, kernel_size, 1 if i % 2 == 0 else 2, None,
-                                    act=nn.LeakyReLU(0.2)))
+            if i == 0:
+                conv_blocks.append(ConvWithoutBN(in_channels, out_channels,
+                                                 kernel_size, 1 if i % 2 == 0 else 2, None,
+                                                 act=nn.LeakyReLU(0.2)))
+            else:
+                conv_blocks.append(Conv(in_channels, out_channels,
+                                        kernel_size, 1 if i % 2 == 0 else 2, None,
+                                        act=nn.LeakyReLU(0.2)))
             in_channels = out_channels
         self.conv_blocks = nn.Sequential(*conv_blocks)
 
         # An adaptive pool layer that resizes it to a standard size
         # For the default input size of 96 and 8 convolutional blocks, this will have no effect
         self.adaptive_pool = nn.AdaptiveAvgPool2d((6, 6))
-        self.fc1 = FullyConnected(out_channels * 6 * 6, fc_size, act=nn.LeakyReLU(0.2))
+        self.fc1 = nn.Sequential(nn.Linear(out_channels * 6 * 6, fc_size), nn.LeakyReLU(0.2))
         self.fc2 = nn.Linear(fc_size, 1)
 
         for x in self.modules():
@@ -604,7 +610,10 @@ class Denoise(nn.Module):
                                                          64, 3,
                                                          act=nn.LeakyReLU(0.2)) for _ in range(residual_blocks // 2)])
         self.residual_conv0 = Conv(64, 256, 3, 2, act=nn.LeakyReLU(0.2))
-        self.residual_1 = ResidualBlock1(256, 256, 128, 3, nn.LeakyReLU(0.2))
+        self.residual_1 = nn.Sequential(*[ResidualBlock1(256,
+                                                         256,
+                                                         256, 3,
+                                                         nn.LeakyReLU(0.2)) for _ in range(2)])
         self.residual_conv1 = nn.Sequential(*[nn.PixelShuffle(2), nn.LeakyReLU(0.2)])
 
         self.residual_2 = nn.Sequential(*[ResidualBlock1(64, 64,
@@ -692,11 +701,9 @@ class Model(nn.Module):
 
 
 if __name__ == '__main__':
-    if torch.cuda.is_available():
-        torch.jit.enable_onednn_fusion(True)
-    model = Model(Denoise(8))
+    model = Model(SRGAN(23))
     # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
-    ckpt = torch.load("../denoise_checkpoint.pt", "cpu")
+    ckpt = torch.load("../gen_RRDB23.pt", "cpu")
     model.net.load_state_dict(ckpt['gen_net'].float().state_dict())
     model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
@@ -704,7 +711,6 @@ if __name__ == '__main__':
     model.eval().fuse()
     try:
         import torch_directml
-
         device = torch_directml.device(0)
     except Exception as ex:
         device = torch.device(0) if torch.cuda.is_available() else "cpu"

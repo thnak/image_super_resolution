@@ -83,8 +83,8 @@ def train_srgan(gen_net: SRGAN, tanh2norm: ConvertTanh2Norm, ema: ModelEMA, dis_
     pbar = tqdm(dataloader, total=len(dataloader))
     for idx, (hr_images, lr_images) in enumerate(pbar):
         hr_images, lr_images = hr_images.to(device, non_blocking=True), lr_images.to(device, non_blocking=True)
-        # for x in dis_net.parameters():
-        #     x.requires_grad = False
+        for x in dis_net.parameters():
+            x.requires_grad = False
         with autocast(device_type=autocast_device,
                       enabled=device.type == 'cuda'):
             sr_images = tanh2norm(gen_net(lr_images))
@@ -101,8 +101,8 @@ def train_srgan(gen_net: SRGAN, tanh2norm: ConvertTanh2Norm, ema: ModelEMA, dis_
         schedule_g.step()
         ema.update(gen_net)
         loss_adv.append(adversarial_loss.item())
-        # for x in dis_net.parameters():
-        #     x.requires_grad = True
+        for x in dis_net.parameters():
+            x.requires_grad = True
         with autocast(device_type=autocast_device,
                       enabled=device.type == 'cuda'):
             sr_discriminated = dis_net(sr_images.detach())
