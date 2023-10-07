@@ -554,16 +554,16 @@ class ResNet(nn.Module):
     def __init__(self, num_block_resnet=16):
         super().__init__()
 
-        self.conv0 = nn.Sequential(Conv(3, 64, 9, act=nn.PReLU()))
+        self.conv0 = nn.Sequential(ConvWithoutBN(3, 64, 9, act=nn.PReLU(2)))
         residual = [RRDB(64, 3,
-                         act=nn.PReLU(), add_rate=0.2) for _ in range(num_block_resnet)]
+                         act=nn.PReLU(2), add_rate=0.2) for _ in range(num_block_resnet)]
         # residual = [ResidualBlock1(64, 64, 64, 3, nn.LeakyReLU(0.2)) for _ in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
         scaler = [Scaler(64, 64,
                          2, 3,
-                         nn.PReLU()) for _ in range(2)]
+                         nn.PReLU(2)) for _ in range(2)]
         self.scaler = nn.Sequential(*scaler)
         self.conv2 = ConvWithoutBN(64, 3, 9, 1, act=nn.Tanh())
 
