@@ -64,7 +64,7 @@ def train(model: any, ema: ModelEMA, dataloader, compute_loss: MSELoss, optimize
     return losses
 
 
-def train_srgan(gen_net: SRGAN, tanh2norm: ConvertTanh2Norm, ema: ModelEMA, dis_net: Discriminator, dataloader,
+def train_srgan(gen_net: SRGAN, ema: ModelEMA, dis_net: Discriminator, dataloader,
                 compute_loss: gen_loss,
                 optimizer_g: Adam | SGD,
                 optimizer_d: Adam | SGD,
@@ -81,13 +81,19 @@ def train_srgan(gen_net: SRGAN, tanh2norm: ConvertTanh2Norm, ema: ModelEMA, dis_
     ema.ema.to(device)
     autocast_device = "cuda" if torch.cuda.is_available() else "cpu"
     pbar = tqdm(dataloader, total=len(dataloader))
+    mean = dataloader.dataset.mean
+    std = dataloader.dataset.std
+    mean = torch.tensor(mean, device=device).unsqueeze(0).unsqueeze(2).unsqueeze(3)
+    std = torch.tensor(std, device=device).unsqueeze(0).unsqueeze(2).unsqueeze(3)
     for idx, (hr_images, lr_images) in enumerate(pbar):
         hr_images, lr_images = hr_images.to(device, non_blocking=True), lr_images.to(device, non_blocking=True)
         for x in dis_net.parameters():
             x.requires_grad = False
         with autocast(device_type=autocast_device,
                       enabled=device.type == 'cuda'):
-            sr_images = tanh2norm(gen_net(lr_images))
+            sr_images = gen_net(lr_images)
+            sr_images = (sr_images + 1.0) / 2.0
+            sr_images = (sr_images - mean) / std
             sr_discriminated = dis_net(sr_images)
             perceptual_loss, adversarial_loss, content_loss = compute_loss.calc_contentLoss(sr_images, hr_images,
                                                                                             sr_discriminated)
@@ -149,10 +155,11 @@ if __name__ == '__main__':
     parser.add_argument("--L1_loss", action="store_true")
     parser.add_argument("--rs_deep", type=int, default=16, help="")
     parser.add_argument("--shape", type=int, default=96)
-    parser.add_argument("--save_name", type=str, default="checkpoint.pt")
+    parser.add_argument("--save_name", type=str, default="checkpoint")
     parser.add_argument("--nowarn", action="store_true")
     parser.add_argument("--lr2", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=100)
+    parser.add_argument("--add_rate", type=float, default=0.2)
 
     opt = parser.parse_args()
     first_setup(opt.seed)
@@ -164,9 +171,10 @@ if __name__ == '__main__':
     json_file = Path("./train_images.json")
     work_dir = Path(opt.work_dir)
     work_dir.mkdir(exist_ok=True)
-    res_checkpoints = Path(f"res_{opt.save_name}")
-    gen_checkpoints = Path(f"gen_{opt.save_name}")
-    denoise_checkpoints = Path(f"denoise_{opt.save_name}")
+    res_checkpoints = Path(f"res_{opt.save_name}_{opt.rs_deep}_{opt.add_rate}.pt")
+    gen_checkpoints = Path(f"gen_{opt.save_name}_{opt.rs_deep}_{opt.add_rate}.pt")
+    denoise_checkpoints = Path(f"denoise_{opt.save_name}_{opt.rs_deep}_{opt.add_rate}.pt")
+
     res_checkpoints = work_dir / res_checkpoints
     gen_checkpoints = work_dir / gen_checkpoints
     denoise_checkpoints = work_dir / denoise_checkpoints
@@ -237,7 +245,7 @@ if __name__ == '__main__':
         dataloader = init_dataloader(dataset, batch_size=batch_size, num_worker=workers)[0]
         prefix = "Train: "
         if opt.resnet:
-            model = ResNet(opt.rs_deep)
+            model = ResNet(opt.rs_deep, opt.add_rate)
             for x in model.parameters():
                 x.requires_grad = True
             ema = ModelEMA(model)
@@ -255,8 +263,8 @@ if __name__ == '__main__':
             if opt.resume:
                 if res_checkpoints.is_file():
                     ckpt = torch.load(res_checkpoints.as_posix(), 'cpu')
-                    checkpoint_state = intersect_dicts(ckpt['gen_net'].float().state_dict(), model.state_dict())
-                    # ema.ema.load_state_dict(ckpt['ema'].float().state_dict())
+                    checkpoint_state = intersect_dicts(ckpt['ema'].float().state_dict(), model.state_dict())
+                    ema.ema.load_state_dict(ckpt['ema'].float().state_dict())
                     ema.updates = ckpt['updates']
                     model.load_state_dict(checkpoint_state, strict=False)
                     if len(checkpoint_state) == len(model.state_dict()):
@@ -281,8 +289,7 @@ if __name__ == '__main__':
                            res_checkpoints.as_posix())
 
         else:
-            gen_net = SRGAN(opt.rs_deep)
-            tanh2norm = ConvertTanh2Norm(mean=dataset.mean, std=dataset.std)
+            gen_net = SRGAN(opt.rs_deep, opt.add_rate)
             gen_net.init_weight(pretrained=res_checkpoints.as_posix())
             dis_net = Discriminator(3, 64, 8, 1024)
             ema = ModelEMA(gen_net)
@@ -310,8 +317,10 @@ if __name__ == '__main__':
                 if gen_checkpoints.is_file():
                     print(f"Train: load state dict from {gen_checkpoints.as_posix()}")
                     ckpt = torch.load(gen_checkpoints.as_posix(), "cpu")
-                    gen_net.load_state_dict(intersect_dicts(ckpt['gen_net'].float().state_dict(), gen_net.state_dict()), strict=False)
-                    dis_net.load_state_dict(intersect_dicts(ckpt['dis_net'].float().state_dict(), dis_net.state_dict()), strict=False)
+                    gen_net.load_state_dict(intersect_dicts(ckpt['ema'].float().state_dict(), gen_net.state_dict()),
+                                            strict=False)
+                    dis_net.load_state_dict(intersect_dicts(ckpt['dis_net'].float().state_dict(), dis_net.state_dict()),
+                                            strict=False)
                     if ckpt.get("optimizer_g") is not None:
                         optimizer_g.load_state_dict(ckpt['optimizer_g'])
                         optimizer_d.load_state_dict(ckpt['optimizer_d'])
@@ -319,7 +328,7 @@ if __name__ == '__main__':
                         optimizer_to(optimizer_d, device)
                     scaler_gen.load_state_dict(ckpt['scaler_res'])
                     scaler_dis.load_state_dict(ckpt['scaler_gen'])
-                    # ema.ema.load_state_dict(ckpt['ema'].float().state_dict())
+                    ema.ema.load_state_dict(ckpt['ema'].float().state_dict())
                     ema.updates = ckpt['updates']
                     start_epoch = ckpt['epoch'] + 1
                     del ckpt
@@ -328,9 +337,9 @@ if __name__ == '__main__':
                         gen_net.res_net.load_state_dict(torch.load(res_checkpoints, "cpu")['gen_net'], strict=False)
 
             compute_loss = gen_loss(device=device)
+
             gen_net.to(device)
             dis_net.to(device)
-            tanh2norm.to(device)
             n_P = sum([x.numel() for x in gen_net.parameters()])
             n_g = sum(x.numel() for x in gen_net.parameters() if x.requires_grad)  # number gradients
             print(f"{prefix}{n_P:,} parameters, {n_g:,} gradients")
@@ -338,7 +347,7 @@ if __name__ == '__main__':
             best_fitness = 1000
 
             for x in range(start_epoch, epochs):
-                loss = train_srgan(gen_net=gen_net, tanh2norm=tanh2norm, ema=ema,
+                loss = train_srgan(gen_net=gen_net, ema=ema,
                                    dis_net=dis_net, dataloader=dataloader,
                                    compute_loss=compute_loss,
                                    optimizer_g=optimizer_g, optimizer_d=optimizer_d,

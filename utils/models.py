@@ -551,13 +551,13 @@ class Scaler(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, num_block_resnet=16):
+    def __init__(self, num_block_resnet=16, add_rate=0.2):
         super().__init__()
 
         self.conv0 = nn.Sequential(ConvWithoutBN(3, 64, 9, act=nn.PReLU(2)))
-        residual = [RRDB(64, 3,
-                         act=nn.PReLU(2), add_rate=0.2) for _ in range(num_block_resnet)]
-        # residual = [ResidualBlock1(64, 64, 64, 3, nn.LeakyReLU(0.2)) for _ in range(num_block_resnet)]
+        # residual = [RRDB(64, 3,
+        #                  act=nn.PReLU(2), add_rate=add_rate) for _ in range(num_block_resnet)]
+        residual = [ResidualBlock1(64, 64, 64, 3, nn.PReLU(2)) for _ in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
@@ -571,13 +571,6 @@ class ResNet(nn.Module):
             if hasattr(x, "inplace"):
                 x.inplace = True
 
-        for module in self.modules():
-            if isinstance(module, nn.Conv2d):
-                nn.init.kaiming_normal_(module.weight)
-                module.weight.data *= 0.2
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0)
-
     def forward(self, inputs: torch.Tensor):
         inputs = self.conv0(inputs)
         inputs = inputs + self.conv1(self.residual(inputs))
@@ -588,13 +581,13 @@ class ResNet(nn.Module):
 
 class SRGAN(nn.Module):
 
-    def __init__(self, resnet):
+    def __init__(self, deep, add_rate):
         super().__init__()
-        self.res_net = ResNet(resnet)
+        self.res_net = ResNet(deep, add_rate)
 
     def init_weight(self, pretrained):
         ckpt = torch.load(pretrained, "cpu")
-        self.res_net.load_state_dict(ckpt['gen_net'].float().state_dict())
+        self.res_net.load_state_dict(ckpt['ema'].float().state_dict())
 
     def forward(self, inputs: torch.Tensor):
         inputs = self.res_net(inputs)
@@ -626,12 +619,6 @@ class Denoise(nn.Module):
             if hasattr(x, "inplace"):
                 x.inplace = True
 
-        for module in self.modules():
-            if isinstance(module, nn.Conv2d):
-                nn.init.kaiming_normal_(module.weight)
-                module.weight.data *= 0.2
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0)
 
     def forward(self, inputs: torch.Tensor):
         inputs = self.conv0(inputs)
@@ -707,22 +694,21 @@ if __name__ == '__main__':
     loss = ckpt['loss']
     import numpy as np
 
-    print(np.min(loss))
-    model.net.load_state_dict(ckpt['ema'])
-    model.init_normalize(ckpt['mean'], ckpt['std'])
+    print(np.mean(loss))
+    # model.net.load_state_dict(ckpt['ema'])
+    # model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False
     model.eval().fuse()
     try:
         import torch_directml
-
         device = torch_directml.device(0)
     except Exception as ex:
         device = torch.device(0) if torch.cuda.is_available() else "cpu"
     device = "cpu"
 
     model.to(device)
-    feed = torch.zeros([1, 3, 96, 96], dtype=torch.uint8, device=device)
+    feed = torch.zeros([1, 3, 96, 96], dtype=torch.float32, device=device)
 
     if torch.cuda.is_available():
         model.half()

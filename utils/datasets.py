@@ -239,7 +239,7 @@ class SR_dataset(Dataset):
             self.calculateNormValues()
         self.transform_lr = Compose([Random_low_rs(target_size, scales_factor),
                                      torchvision.transforms.Normalize(mean=self.mean, std=self.std, inplace=True)])
-        self.transform_hr = PIL_to_tanh(max_pixel_value=255.0)  # - > tanh
+        self.transform_hr = lambda x: 2. * x - 1.
 
     def calculateNormValues(self):
         prefix = ""
