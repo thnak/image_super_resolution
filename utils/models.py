@@ -554,9 +554,9 @@ class ResNet(nn.Module):
     def __init__(self, num_block_resnet=16, add_rate=0.2):
         super().__init__()
 
-        self.conv0 = nn.Sequential(ConvWithoutBN(3, 64, 9, act=nn.PReLU(2)))
-        # residual = [RRDB(64, 3,
-        #                  act=nn.PReLU(2), add_rate=add_rate) for _ in range(num_block_resnet)]
+        self.conv0 = ConvWithoutBN(3, 64, 9, 1, None, act=nn.PReLU(2))
+        residual = [RRDB(64, 3,
+                         act=nn.PReLU(2), add_rate=add_rate) for _ in range(num_block_resnet)]
         residual = [ResidualBlock1(64, 64, 64, 3, nn.PReLU(2)) for _ in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
@@ -725,6 +725,7 @@ if __name__ == '__main__':
     jit_m = torch.jit.trace(model, feed)
     torch.jit.save(jit_m, "model.pt")
     axe = {'images': {2: "x", 3: "x"}, "outputs": {}}
+    axe = None
     torch.onnx.export(model, feed, "model.onnx", dynamic_axes=axe,
                       input_names=["images"], output_names=["outputs"])
     import onnx

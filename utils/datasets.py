@@ -1,6 +1,7 @@
 import random
 from typing import Union
 
+import PIL.Image
 import cv2
 import numpy as np
 import torch
@@ -211,14 +212,24 @@ class ColorJitter(Module):
         return inputs
 
 
-def image_reader(image_dir: Union[Path, str]):
+def image_reader(image_dir: Union[Path, str], shape: int, scale: int):
     """image to [0, 1] tensor"""
     image = Image.open(image_dir)
     if image.mode != "RGB":
         image = image.convert("RGB")
-    result = T.to_tensor(image)
+    h = image.height
+    w = image.width
+    lr_shape = shape // scale
+    left = random.randint(1, w - shape)
+    bottom = random.randint(1, h - shape)
+    right = left + shape
+    top = bottom + shape
+    image = image.crop((left, bottom, right, top))
+
+    hr_image = T.to_tensor(image)
+    lr_image = T.to_tensor(image.resize((lr_shape, lr_shape), Image.Resampling.BICUBIC))
     image.close()
-    return result
+    return hr_image, lr_image
 
 
 class SR_dataset(Dataset):
@@ -234,11 +245,9 @@ class SR_dataset(Dataset):
         print(f"{prefix}{len(self.samples)} images with target shape {target_size} with scale factor {scales_factor}.")
         self.target_size = target_size
         self.scale_factor = scales_factor
-        self.ran_position = Random_position(target_size=target_size)
         if calculateNorm:
             self.calculateNormValues()
-        self.transform_lr = Compose([Random_low_rs(target_size, scales_factor),
-                                     torchvision.transforms.Normalize(mean=self.mean, std=self.std, inplace=True)])
+        self.transform_lr = torchvision.transforms.Normalize(mean=self.mean, std=self.std, inplace=True)
         self.transform_hr = PIL_to_tanh()
 
     def calculateNormValues(self):
@@ -278,9 +287,8 @@ class SR_dataset(Dataset):
         return self
 
     def __getitem__(self, item):
-        image = image_reader(self.samples[item])
-        image = self.ran_position(image)
-        return self.transform_hr(image), self.transform_lr(image)
+        hr_image, lr_image = image_reader(self.samples[item], self.target_size, self.scale_factor)
+        return self.transform_hr(hr_image), self.transform_lr(lr_image)
 
     def __len__(self):
         return len(self.samples)
@@ -387,5 +395,5 @@ def init_dataloader_for_inference(src, worker, batch_size):
         src = Path(src)
     dataset = dataset_for_inference(src)
     dataloader = DataLoader(dataset, batch_size, shuffle=True, num_workers=worker,
-                            pin_memory=True, persistent_workers=True)
+                            pin_memory=True, persistent_workers=False)
     return dataloader, dataset
