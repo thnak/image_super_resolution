@@ -150,6 +150,27 @@ class ConvTranspose(nn.Module):
             self.store_bn = nn.Identity()
 
 
+class ConvAIPE(Conv):
+    """analysis into polynomial elements of Conv"""
+
+    def __init__(self, c1, c2, kernels, stride=1, act=False):
+        super().__init__(c1, c2, k=kernels, s=stride, act=act)
+        conv = self.conv
+        in_channels = conv.in_channels
+        out_channels = conv.out_channels
+        kernels = conv.kernel_size
+        stride = conv.stride
+        dilation = conv.dilation
+        groups = conv.groups
+        act = self.act
+        self.conv = nn.Sequential(
+            Conv(in_channels, out_channels, [kernels[0], 1], 1, None, groups, dilation[0], act=act),
+            Conv(out_channels, out_channels, [1, kernels[1]], stride, None, groups, dilation[0], act=act))
+        self.bn = nn.Identity()
+        self.drop = nn.Identity()
+        self.act = nn.Identity()
+
+
 class ConvWithoutBN(nn.Module):
     """Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation, dropout"""
     store_bn = nn.Identity()
@@ -203,17 +224,23 @@ class ResidualBlock2(nn.Module):
         return self.act(self.m1(inputs) + self.m(inputs))
 
 
-class ResidualBlock3(nn.Module):
-    def __init__(self, in_channel: int, out_channel: int, hidden_channel: int, kernel: any, act: any):
-        super(ResidualBlock3, self).__init__()
-        act = fix_problem_with_reuse_activation_funtion(act)
-        self.m = nn.Sequential(
-            Conv(in_channel, hidden_channel, 1, 1, None, act=act),
-            Inception(hidden_channel, hidden_channel, act),
-            Conv(hidden_channel, out_channel, 1, 1, None, act=False))
+class Mixed_7a(nn.Module):
+    def __init__(self, in_channels, stride, act):
+        super().__init__()
+        self.conv_0 = Conv(in_channels, in_channels, 1, 1, None, act=act)
+        self.conv_1 = nn.Sequential(Conv(in_channels, in_channels // 3, 1, 1, None, act=act),
+                                    Conv(in_channels // 3, in_channels // 3, 3, 1, None, act=act),
+                                    Conv(in_channels // 3, in_channels, 3, 1, None, act=act))
+        self.max_pool = nn.MaxPool2d(kernel_size=3, stride=stride, padding=1)
 
-    def forward(self, inputs: torch.Tensor):
-        return inputs + self.m(inputs)
+    def forward(self, inputs):
+        return torch.cat([self.conv_0(inputs), self.conv_1(inputs), self.max_pool(inputs)])
+
+
+class Mixed_7b(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # self.conv_0 = Conv()
 
 
 class RDB(nn.Module):
@@ -305,7 +332,9 @@ class Inception(nn.Module):
     def __init__(self, in_channel, out_channel, act=any):
         super().__init__()
         assert out_channel >= 4, f"Inception node must have output channels >= 4, got {out_channel}"
+
         self.conv1 = Conv(in_channel, out_channel // 4, 1, 1, act=False)
+
         conv2_1 = Conv(in_channel, out_channel // 4, 1, 1, act=act)
         conv2_2 = Conv(out_channel // 4, out_channel // 4, 5, 1, act=False)
         self.conv2 = nn.Sequential(conv2_1, conv2_2)
@@ -316,6 +345,7 @@ class Inception(nn.Module):
 
         self.conv4 = nn.Sequential(nn.MaxPool2d(3, stride=1, padding=1),
                                    Conv(in_channel, out_channel // 4, 1, 1, act=False))
+
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, inputs):
@@ -554,16 +584,16 @@ class ResNet(nn.Module):
     def __init__(self, num_block_resnet=16, add_rate=0.2):
         super().__init__()
 
-        self.conv0 = ConvWithoutBN(3, 64, 9, 1, None, act=nn.PReLU(2))
+        self.conv0 = ConvWithoutBN(3, 64, 9, 1, None, act=nn.LeakyReLU(0.2))
         residual = [RRDB(64, 3,
-                         act=nn.PReLU(2), add_rate=add_rate) for _ in range(num_block_resnet)]
-        residual = [ResidualBlock1(64, 64, 64, 3, nn.PReLU(2)) for _ in range(num_block_resnet)]
+                         act=nn.LeakyReLU(0.2), add_rate=add_rate) for _ in range(num_block_resnet)]
+        residual = [ResidualBlock1(64, 64, 64, 3, nn.LeakyReLU(0.2)) for _ in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
         scaler = [Scaler(64, 64,
                          2, 3,
-                         nn.PReLU(2)) for _ in range(2)]
+                         nn.LeakyReLU(0.2)) for _ in range(2)]
         self.scaler = nn.Sequential(*scaler)
         self.conv2 = ConvWithoutBN(64, 3, 9, 1, act=nn.Tanh())
 
@@ -618,7 +648,6 @@ class Denoise(nn.Module):
         for x in self.modules():
             if hasattr(x, "inplace"):
                 x.inplace = True
-
 
     def forward(self, inputs: torch.Tensor):
         inputs = self.conv0(inputs)
@@ -688,27 +717,29 @@ class Model(nn.Module):
 
 
 if __name__ == '__main__':
-    model = Model(ResNet(23))
-    # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
-    ckpt = torch.load("../res_RRDB23.pt", "cpu")
-    loss = ckpt['loss']
-    import numpy as np
-
-    print(np.mean(loss))
-    # model.net.load_state_dict(ckpt['ema'])
-    # model.init_normalize(ckpt['mean'], ckpt['std'])
-    for x in model.parameters():
-        x.requires_grad = False
-    model.eval().fuse()
     try:
         import torch_directml
+
         device = torch_directml.device(0)
     except Exception as ex:
         device = torch.device(0) if torch.cuda.is_available() else "cpu"
     device = "cpu"
-
+    model = Model(SRGAN(6, 0.2))
     model.to(device)
-    feed = torch.zeros([1, 3, 96, 96], dtype=torch.float32, device=device)
+
+    # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
+    ckpt = torch.load("../gen_ResidualBlock_6_0.2.pt", "cpu")
+    loss = ckpt['loss']
+    import numpy as np
+
+    print(np.mean(loss))
+    model.net.load_state_dict(ckpt['ema'].float().state_dict())
+    model.init_normalize(ckpt['mean'], ckpt['std'])
+    for x in model.parameters():
+        x.requires_grad = False
+    model.eval().fuse()
+
+    feed = torch.zeros([1, 3, 96, 96], dtype=torch.uint8, device=device)
 
     if torch.cuda.is_available():
         model.half()

@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from utils.models import ConvertTanh2Norm, TruncatedVGG19
+from utils.models import TruncatedVGG19
 
 
 class gen_loss:
@@ -8,6 +8,7 @@ class gen_loss:
         self.vgg_net = TruncatedVGG19(vgg_i, vgg_j).to(device)
         for x in self.vgg_net.parameters():
             x.requires_grad = False
+        self.vgg_net.eval()
         self.mse = nn.MSELoss()
         self.bce = nn.BCEWithLogitsLoss()
         self.beta = beta

@@ -14,12 +14,13 @@ from torch.nn import MSELoss
 from torch import nn, autocast
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import Adam, SGD
-from torch.optim.lr_scheduler import LambdaLR, LinearLR
+from torch.optim.lr_scheduler import LinearLR
 from tqdm import tqdm
 from utils.models import ResNet, SRGAN, Discriminator, Denoise, ModelEMA, ConvertTanh2Norm
 from utils.general import intersect_dicts
 from utils.datasets import SR_dataset, init_dataloader, Noisy_dataset
 from utils.loss import gen_loss
+from torch.utils.tensorboard import SummaryWriter
 
 
 def optimizer_to(optim, device):
@@ -38,13 +39,14 @@ def optimizer_to(optim, device):
 
 
 def train(model: any, ema: ModelEMA, dataloader, compute_loss: MSELoss, optimizer: any, gradscaler: GradScaler,
-          schedule, epoch: int):
+          schedule, epoch: int, tensorBoard: SummaryWriter):
     model.train()
     losses = []
     device = next(model.parameters()).device
     ema.ema.to(device)
     autocast_device = "cuda" if torch.cuda.is_available() else "cpu"
-    pbar = tqdm(dataloader, total=len(dataloader))
+    total = len(dataloader)
+    pbar = tqdm(dataloader, total=total)
     for idx, (hr_images, lr_images) in enumerate(pbar):
         hr_images, lr_images = hr_images.to(device, non_blocking=True), lr_images.to(device, non_blocking=True)
         for _ in range(1):
@@ -60,7 +62,9 @@ def train(model: any, ema: ModelEMA, dataloader, compute_loss: MSELoss, optimize
             schedule.step()
             ema.update(model)
             losses.append(loss.item())
-        pbar.desc = f"Epoch [{epoch}] Loss: {np.mean(losses)} minLoss: {np.min(losses)}"
+            tensorBoard.add_scalar("loss", loss.item(), epoch * total + idx + 1)
+            tensorBoard.flush()
+        pbar.desc = f"Epoch [{epoch}]..."
     return losses
 
 
@@ -69,7 +73,8 @@ def train_srgan(gen_net: SRGAN, ema: ModelEMA, dis_net: Discriminator, dataloade
                 optimizer_g: Adam | SGD,
                 optimizer_d: Adam | SGD,
                 gradscaler: tuple[GradScaler, GradScaler],
-                schedules: tuple[LinearLR, LinearLR], epoch: int):
+                schedules: tuple[LinearLR, LinearLR], epoch: int,
+                tensorBoard: SummaryWriter):
     gen_net.train()
     dis_net.train()
     loss_g = []
@@ -80,15 +85,14 @@ def train_srgan(gen_net: SRGAN, ema: ModelEMA, dis_net: Discriminator, dataloade
     device = next(gen_net.parameters()).device
     ema.ema.to(device)
     autocast_device = "cuda" if torch.cuda.is_available() else "cpu"
-    pbar = tqdm(dataloader, total=len(dataloader))
+    total = len(dataloader)
+    pbar = tqdm(dataloader, total=total)
     mean = dataloader.dataset.mean
     std = dataloader.dataset.std
     mean = torch.tensor(mean, device=device).unsqueeze(0).unsqueeze(2).unsqueeze(3)
     std = torch.tensor(std, device=device).unsqueeze(0).unsqueeze(2).unsqueeze(3)
     for idx, (hr_images, lr_images) in enumerate(pbar):
         hr_images, lr_images = hr_images.to(device, non_blocking=True), lr_images.to(device, non_blocking=True)
-        for x in dis_net.parameters():
-            x.requires_grad = False
         with autocast(device_type=autocast_device,
                       enabled=device.type == 'cuda'):
             sr_images = gen_net(lr_images)
@@ -104,11 +108,12 @@ def train_srgan(gen_net: SRGAN, ema: ModelEMA, dis_net: Discriminator, dataloade
         gradscaler_gen.step(optimizer_g)
         gradscaler_gen.update()
         loss_g.append(content_loss.item())
+        tensorBoard.add_scalar("loss/content", content_loss.item(), epoch * total + idx + 1)
         schedule_g.step()
         ema.update(gen_net)
         loss_adv.append(adversarial_loss.item())
-        for x in dis_net.parameters():
-            x.requires_grad = True
+        tensorBoard.add_scalar("loss/adv", adversarial_loss.item(), epoch * total + idx + 1)
+
         with autocast(device_type=autocast_device,
                       enabled=device.type == 'cuda'):
             sr_discriminated = dis_net(sr_images.detach())
@@ -122,10 +127,10 @@ def train_srgan(gen_net: SRGAN, ema: ModelEMA, dis_net: Discriminator, dataloade
         gradscaler_dis.step(optimizer_d)
         gradscaler_dis.update()
         loss_d.append(adversarial_loss.item())
+        tensorBoard.add_scalar("loss/dis", adversarial_loss.item(), epoch * total + idx + 1)
         schedule_d.step()
-
-        pbar.desc = (
-            f"Epoch [{epoch}] Loss gen: {np.mean(loss_g)}, Loss dis: {np.mean(loss_d)}, Adv: {np.mean(loss_adv)}")
+        tensorBoard.flush()
+        pbar.desc = (f"Epoch [{epoch}]...")
 
     return loss_g
 
@@ -156,17 +161,12 @@ if __name__ == '__main__':
     parser.add_argument("--rs_deep", type=int, default=16, help="")
     parser.add_argument("--shape", type=int, default=96)
     parser.add_argument("--save_name", type=str, default="checkpoint")
-    parser.add_argument("--nowarn", action="store_true")
     parser.add_argument("--lr2", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=100)
     parser.add_argument("--add_rate", type=float, default=0.2)
 
     opt = parser.parse_args()
     first_setup(opt.seed)
-    if opt.nowarn:
-        warnings.filterwarnings("ignore",
-                                message="libpng warning: iCCP: profile 'ICC Profile': 'GRAY': Gray color space not permitted on RGB PNG")
-        warnings.warn("libpng warning: iCCP: profile 'ICC Profile': 'GRAY': Gray color space not permitted on RGB PNG")
 
     json_file = Path("./train_images.json")
     work_dir = Path(opt.work_dir)
@@ -174,10 +174,11 @@ if __name__ == '__main__':
     res_checkpoints = Path(f"res_{opt.save_name}_{opt.rs_deep}_{opt.add_rate}.pt")
     gen_checkpoints = Path(f"gen_{opt.save_name}_{opt.rs_deep}_{opt.add_rate}.pt")
     denoise_checkpoints = Path(f"denoise_{opt.save_name}_{opt.rs_deep}_{opt.add_rate}.pt")
-
     res_checkpoints = work_dir / res_checkpoints
     gen_checkpoints = work_dir / gen_checkpoints
     denoise_checkpoints = work_dir / denoise_checkpoints
+    tensorBoard = SummaryWriter(work_dir.as_posix(), comment=opt.save_name, flush_secs=1)
+
     if opt.dml:
         import torch_directml
 
@@ -231,7 +232,7 @@ if __name__ == '__main__':
         n_g = sum([x.numel() for x in model.parameters() if x.requires_grad])
         print(f"Model: {n_p:,} parameters, {n_g:,} gradients")
         for epoch in range(start_epoch, epochs):
-            train(model, ema, dataloader, compute_loss, optimizer, scaler_gen, schedule, epoch)
+            train(model, ema, dataloader, compute_loss, optimizer, scaler_gen, schedule, epoch, tensorBoard)
             torch.save({'gen_net': deepcopy(model).cpu().half(),
                         "optimizer": optimizer.state_dict() if epoch != epochs - 1 else None,
                         "epoch": epoch,
@@ -243,15 +244,23 @@ if __name__ == '__main__':
         if not opt.resnet:
             dataset = dataset.set_transform_hr()
         dataloader = init_dataloader(dataset, batch_size=batch_size, num_worker=workers)[0]
+        if not opt.resume:
+            for idx, (hr, lr) in enumerate(dataloader):
+                tensorBoard.add_images("images/hr", hr, idx)
+                tensorBoard.add_images("images/lr", lr, idx)
+                if idx == 10:
+                    del hr, lr
+                    break
         prefix = "Train: "
         if opt.resnet:
             model = ResNet(opt.rs_deep, opt.add_rate)
             for x in model.parameters():
                 x.requires_grad = True
             ema = ModelEMA(model)
+            tensorBoard.add_graph(model, torch.zeros([2, 3, 96, 96]))
             model.to(device)
             compute_loss = nn.MSELoss()
-            optimizer = torch.optim.Adam(params=model.parameters(), lr=lr, betas=(0.9, 0.999),
+            optimizer = torch.optim.Adam(params=model.parameters(), lr=opt.lr, betas=(0.9, 0.999),
                                          weight_decay=weight_decay)
 
             schedule = LinearLR(optimizer, start_factor=1, end_factor=opt.lr2,
@@ -274,10 +283,12 @@ if __name__ == '__main__':
                         start_epoch = ckpt['epoch'] + 1
                         # optimizer_to(optimizer, device)
                     print(f"Loaded pre-trained {len(checkpoint_state)}/{len(model.state_dict())} model")
+                    for x in model.parameters():
+                        x.requires_grad = True
                     del ckpt, checkpoint_state
 
             for epoch in range(start_epoch, epochs):
-                loss = train(model, ema, dataloader, compute_loss, optimizer, scaler_gen, schedule, epoch)
+                loss = train(model, ema, dataloader, compute_loss, optimizer, scaler_gen, schedule, epoch, tensorBoard)
                 torch.save({"gen_net": deepcopy(model).half(),
                             "optimizer": optimizer.state_dict() if epoch != epochs - 1 else None,
                             "epoch": epoch,
@@ -299,9 +310,9 @@ if __name__ == '__main__':
             for x in dis_net.parameters():
                 x.requires_grad = True
 
-            optimizer_g = torch.optim.Adam(params=gen_net.parameters(), lr=lr, betas=(0.9, 0.999),
+            optimizer_g = torch.optim.Adam(params=gen_net.parameters(), lr=opt.lr, betas=(0.9, 0.999),
                                            weight_decay=weight_decay)
-            optimizer_d = torch.optim.Adam(params=dis_net.parameters(), lr=lr, betas=(0.9, 0.999),
+            optimizer_d = torch.optim.Adam(params=dis_net.parameters(), lr=opt.lr, betas=(0.9, 0.999),
                                            weight_decay=weight_decay)
             schedule_g = LinearLR(optimizer_g, start_factor=1, end_factor=opt.lr2,
                                   total_iters=epochs * len(dataloader))
@@ -331,6 +342,11 @@ if __name__ == '__main__':
                     ema.ema.load_state_dict(ckpt['ema'].float().state_dict())
                     ema.updates = ckpt['updates']
                     start_epoch = ckpt['epoch'] + 1
+                    for x in gen_net.parameters():
+                        x.requires_grad = True
+                    for x in dis_net.parameters():
+                        x.requires_grad = True
+
                     del ckpt
                 else:
                     if res_checkpoints.is_file():
@@ -352,7 +368,8 @@ if __name__ == '__main__':
                                    compute_loss=compute_loss,
                                    optimizer_g=optimizer_g, optimizer_d=optimizer_d,
                                    gradscaler=(scaler_gen, scaler_dis),
-                                   schedules=(schedule_g, schedule_d), epoch=x)
+                                   schedules=(schedule_g, schedule_d), epoch=x,
+                                   tensorBoard=tensorBoard)
 
                 torch.save({'gen_net': deepcopy(gen_net).half(),
                             "dis_net": deepcopy(dis_net).half(),
@@ -366,3 +383,4 @@ if __name__ == '__main__':
                             "ema": deepcopy(ema.ema).half(),
                             "updates": ema.updates},
                            gen_checkpoints.as_posix())
+            tensorBoard.close()
