@@ -18,7 +18,7 @@ from torch.optim.lr_scheduler import LinearLR
 from tqdm import tqdm
 from utils.models import ResNet, SRGAN, Discriminator, Denoise, ModelEMA, ConvertTanh2Norm
 from utils.general import intersect_dicts
-from utils.datasets import SR_dataset, init_dataloader, Noisy_dataset
+from utils.datasets import SR_dataset, init_dataloader, Noisy_dataset, DeNormalize
 from utils.loss import gen_loss
 from torch.utils.tensorboard import SummaryWriter
 
@@ -245,9 +245,10 @@ if __name__ == '__main__':
             dataset = dataset.set_transform_hr()
         dataloader = init_dataloader(dataset, batch_size=batch_size, num_worker=workers)[0]
         if not opt.resume:
+            denorm = DeNormalize(mean=dataset.mean, std=dataset.std)
             for idx, (hr, lr) in enumerate(dataloader):
-                tensorBoard.add_images("images/hr", hr, idx)
-                tensorBoard.add_images("images/lr", lr, idx)
+                tensorBoard.add_images("images/hr", denorm(hr), idx)
+                tensorBoard.add_images("images/lr", denorm(lr), idx)
                 if idx == 10:
                     del hr, lr
                     break
@@ -256,7 +257,7 @@ if __name__ == '__main__':
             model = ResNet(opt.rs_deep, opt.add_rate)
             for x in model.parameters():
                 x.requires_grad = True
-            ema = ModelEMA(model)
+            ema = ModelEMA(model, tau=epochs * len(dataloader))
             tensorBoard.add_graph(model, torch.zeros([2, 3, 96, 96]))
             model.to(device)
             compute_loss = nn.MSELoss()
@@ -303,7 +304,7 @@ if __name__ == '__main__':
             gen_net = SRGAN(opt.rs_deep, opt.add_rate)
             gen_net.init_weight(pretrained=res_checkpoints.as_posix())
             dis_net = Discriminator(3, 64, 8, 1024)
-            ema = ModelEMA(gen_net)
+            ema = ModelEMA(gen_net, tau=epochs * len(dataloader))
 
             for x in gen_net.parameters():
                 x.requires_grad = True

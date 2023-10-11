@@ -88,6 +88,7 @@ class DeNormalize(Module):
     def forward(self, inputs):
         inputs *= self.std
         inputs += self.mean
+        inputs *= self.max_pixel_value
         return inputs
 
 

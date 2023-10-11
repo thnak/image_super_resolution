@@ -587,7 +587,7 @@ class ResNet(nn.Module):
         self.conv0 = ConvWithoutBN(3, 64, 9, 1, None, act=nn.LeakyReLU(0.2))
         residual = [RRDB(64, 3,
                          act=nn.LeakyReLU(0.2), add_rate=add_rate) for _ in range(num_block_resnet)]
-        residual = [ResidualBlock1(64, 64, 64, 3, nn.LeakyReLU(0.2)) for _ in range(num_block_resnet)]
+        # residual = [ResidualBlock1(64, 64, 64, 3, nn.PReLU(2)) for _ in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
@@ -724,11 +724,11 @@ if __name__ == '__main__':
     except Exception as ex:
         device = torch.device(0) if torch.cuda.is_available() else "cpu"
     device = "cpu"
-    model = Model(SRGAN(6, 0.2))
+    model = Model(SRGAN(23, 0.2))
     model.to(device)
 
     # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
-    ckpt = torch.load("../gen_ResidualBlock_6_0.2.pt", "cpu")
+    ckpt = torch.load("../gen_RRDB_23_0.2.pt", "cpu")
     loss = ckpt['loss']
     import numpy as np
 
@@ -756,7 +756,7 @@ if __name__ == '__main__':
     jit_m = torch.jit.trace(model, feed)
     torch.jit.save(jit_m, "model.pt")
     axe = {'images': {2: "x", 3: "x"}, "outputs": {}}
-    axe = None
+    # axe = None
     torch.onnx.export(model, feed, "model.onnx", dynamic_axes=axe,
                       input_names=["images"], output_names=["outputs"])
     import onnx
