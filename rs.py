@@ -55,7 +55,7 @@ def runer(**kwargs):
         tanh_2_pil = TanhToArrayImage().to(device)
         video_writer = None
         result_dir = result_dir.with_suffix('.mp4')
-        dataloader, dataset = init_dataloader_for_inference(src, worker, batch_size=batch_size)
+        dataloader, dataset = init_dataloader_for_inference(src, 0, batch_size=batch_size)
         pbar = tqdm(dataloader, total=len(dataloader))
         for idx, frames in enumerate(pbar):
             frames = frames.to(device).float()
