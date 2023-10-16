@@ -494,7 +494,7 @@ class TruncatedVGG19(nn.Module):
             raise "One or both of i=%d and j=%d are not valid choices for the VGG19!" % (i, j)
 
         # Truncate to the jth convolution (+ activation) before the ith maxpool layer
-        self.truncated_vgg19 = nn.Sequential(*list(vgg19.features.children())[:truncate_at])
+        self.truncated_vgg19 = nn.Sequential(*list(vgg19.features.children())[:truncate_at + 1])
         for x in self.modules():
             if hasattr(x, "inplace"):
                 x.inplace = True
