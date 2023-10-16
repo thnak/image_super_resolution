@@ -228,7 +228,18 @@ def image_reader(image_dir: Union[Path, str], shape: int, scale: int):
     image = image.crop((left, bottom, right, top))
 
     hr_image = T.to_tensor(image)
-    lr_image = T.to_tensor(image.resize((lr_shape, lr_shape), Image.Resampling.BICUBIC))
+    ran_val = random.random()
+    sampling_mode = None
+    if ran_val < 0.25:
+        sampling_mode = Image.Resampling.BICUBIC
+    elif ran_val <= 0.5:
+        sampling_mode = Image.Resampling.BILINEAR
+    elif ran_val <= 0.75:
+        sampling_mode = Image.Resampling.BOX
+    elif ran_val <= 1.0:
+        sampling_mode = Image.Resampling.NEAREST
+
+    lr_image = T.to_tensor(image.resize((lr_shape, lr_shape), sampling_mode))
     image.close()
     return hr_image, lr_image
 

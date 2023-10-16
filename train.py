@@ -16,7 +16,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch.optim import Adam, SGD
 from torch.optim.lr_scheduler import LinearLR
 from tqdm import tqdm
-from utils.models import ResNet, SRGAN, Discriminator, Denoise, ModelEMA, ConvertTanh2Norm
+from utils.models import ResNet, EResNet, SRGAN, Discriminator, Denoise, ModelEMA, ConvertTanh2Norm
 from utils.general import intersect_dicts
 from utils.datasets import SR_dataset, init_dataloader, Noisy_dataset, DeNormalize
 from utils.loss import gen_loss
@@ -63,7 +63,6 @@ def train(model: any, ema: ModelEMA, dataloader, compute_loss: MSELoss, optimize
             ema.update(model)
             losses.append(loss.item())
             tensorBoard.add_scalar("loss", loss.item(), epoch * total + idx + 1)
-            tensorBoard.flush()
         pbar.desc = f"Epoch [{epoch}]..."
     return losses
 
@@ -78,8 +77,6 @@ def train_srgan(gen_net: SRGAN, ema: ModelEMA, dis_net: Discriminator, dataloade
     gen_net.train()
     dis_net.train()
     loss_g = []
-    loss_d = []
-    loss_adv = []
     gradscaler_gen, gradscaler_dis = gradscaler
     schedule_g, schedule_d = schedules
     device = next(gen_net.parameters()).device
@@ -99,7 +96,7 @@ def train_srgan(gen_net: SRGAN, ema: ModelEMA, dis_net: Discriminator, dataloade
             sr_images = (sr_images + 1.0) / 2.0
             sr_images = (sr_images - mean) / std
             sr_discriminated = dis_net(sr_images)
-            perceptual_loss, adversarial_loss, content_loss = compute_loss.calc_contentLoss(sr_images, hr_images,
+            perceptual_loss, adversarial_loss_, content_loss = compute_loss.calc_contentLoss(sr_images, hr_images,
                                                                                             sr_discriminated)
         optimizer_g.zero_grad()
         gradscaler_gen.scale(perceptual_loss).backward()
@@ -111,8 +108,7 @@ def train_srgan(gen_net: SRGAN, ema: ModelEMA, dis_net: Discriminator, dataloade
         tensorBoard.add_scalar("loss/content", content_loss.item(), epoch * total + idx + 1)
         schedule_g.step()
         ema.update(gen_net)
-        loss_adv.append(adversarial_loss.item())
-        tensorBoard.add_scalar("loss/adv", adversarial_loss.item(), epoch * total + idx + 1)
+        tensorBoard.add_scalar("loss/adv", adversarial_loss_.item(), epoch * total + idx + 1)
 
         with autocast(device_type=autocast_device,
                       enabled=device.type == 'cuda'):
@@ -126,10 +122,8 @@ def train_srgan(gen_net: SRGAN, ema: ModelEMA, dis_net: Discriminator, dataloade
         clip_grad_norm_(dis_net.parameters(), 10)
         gradscaler_dis.step(optimizer_d)
         gradscaler_dis.update()
-        loss_d.append(adversarial_loss.item())
         tensorBoard.add_scalar("loss/dis", adversarial_loss.item(), epoch * total + idx + 1)
         schedule_d.step()
-        tensorBoard.flush()
         pbar.desc = (f"Epoch [{epoch}]...")
 
     return loss_g
@@ -164,6 +158,7 @@ if __name__ == '__main__':
     parser.add_argument("--lr2", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=100)
     parser.add_argument("--add_rate", type=float, default=0.2)
+    parser.add_argument("--enchant", action="store_true")
 
     opt = parser.parse_args()
     first_setup(opt.seed)
@@ -177,7 +172,7 @@ if __name__ == '__main__':
     res_checkpoints = work_dir / res_checkpoints
     gen_checkpoints = work_dir / gen_checkpoints
     denoise_checkpoints = work_dir / denoise_checkpoints
-    tensorBoard = SummaryWriter(work_dir.as_posix(), comment=opt.save_name, flush_secs=1)
+    tensorBoard = SummaryWriter(work_dir.as_posix(), comment=opt.save_name, flush_secs=30, max_queue=200)
 
     if opt.dml:
         import torch_directml
@@ -254,7 +249,7 @@ if __name__ == '__main__':
                     break
         prefix = "Train: "
         if opt.resnet:
-            model = ResNet(opt.rs_deep, opt.add_rate)
+            model = EResNet(opt.rs_deep, opt.add_rate) if opt.enchant else ResNet(opt.rs_deep, opt.add_rate)
             for x in model.parameters():
                 x.requires_grad = True
             ema = ModelEMA(model, tau=epochs * len(dataloader))
@@ -301,7 +296,7 @@ if __name__ == '__main__':
                            res_checkpoints.as_posix())
 
         else:
-            gen_net = SRGAN(opt.rs_deep, opt.add_rate)
+            gen_net = SRGAN(opt.rs_deep, opt.add_rate, opt.enchant)
             gen_net.init_weight(pretrained=res_checkpoints.as_posix())
             dis_net = Discriminator(3, 64, 8, 1024)
             ema = ModelEMA(gen_net, tau=epochs * len(dataloader))

@@ -246,14 +246,22 @@ class Mixed_7b(nn.Module):
 class RDB(nn.Module):
     """Residual Dense Block"""
 
-    def __init__(self, in_channel, growth_channel, kernel_size, act, add_rate=0.2):
+    def __init__(self, in_channel, growth_channel, kernel_size, act, add_rate=0., use_BN=True):
         super().__init__()
         self.add_rate = add_rate
-        self.conv0 = Conv(in_channel + growth_channel * 0, growth_channel, kernel_size, 1, None, act=act)
-        self.conv1 = Conv(in_channel + growth_channel * 1, growth_channel, kernel_size, 1, None, act=act)
-        self.conv2 = Conv(in_channel + growth_channel * 2, growth_channel, kernel_size, 1, None, act=act)
-        self.conv3 = Conv(in_channel + growth_channel * 3, growth_channel, kernel_size, 1, None, act=act)
-        self.conv = Conv(in_channel + growth_channel * 4, in_channel, kernel_size, 1, None, act=False)
+
+        if use_BN:
+            self.conv0 = Conv(in_channel + growth_channel * 0, growth_channel, kernel_size, 1, None, act=act)
+            self.conv1 = Conv(in_channel + growth_channel * 1, growth_channel, kernel_size, 1, None, act=act)
+            self.conv2 = Conv(in_channel + growth_channel * 2, growth_channel, kernel_size, 1, None, act=act)
+            self.conv3 = Conv(in_channel + growth_channel * 3, growth_channel, kernel_size, 1, None, act=act)
+            self.conv = Conv(in_channel + growth_channel * 4, in_channel, kernel_size, 1, None, act=False)
+        else:
+            self.conv0 = ConvWithoutBN(in_channel + growth_channel * 0, growth_channel, kernel_size, 1, None, act=act)
+            self.conv1 = ConvWithoutBN(in_channel + growth_channel * 1, growth_channel, kernel_size, 1, None, act=act)
+            self.conv2 = ConvWithoutBN(in_channel + growth_channel * 2, growth_channel, kernel_size, 1, None, act=act)
+            self.conv3 = ConvWithoutBN(in_channel + growth_channel * 3, growth_channel, kernel_size, 1, None, act=act)
+            self.conv = ConvWithoutBN(in_channel + growth_channel * 4, in_channel, kernel_size, 1, None, act=False)
 
     def forward(self, inputs):
         output0 = self.conv0(inputs)
@@ -291,7 +299,7 @@ class RDB_PixelShuffle(nn.Module):
 class RRDB(nn.Module):
     """Residual in Residual Dense Block"""
 
-    def __init__(self, filters: int, kernel: any, act: any, add_rate=0.2):
+    def __init__(self, filters: int, kernel: any, act: any, add_rate=0.2, use_BN=True):
         super().__init__()
         assert 0 < add_rate <= 1, f"add must be in range (0, 1]"
         hidden_channel = filters // 2
@@ -302,7 +310,7 @@ class RRDB(nn.Module):
                 act = nn.PReLU()
         forward_net = []
         for _ in range(3):
-            forward_net.append(RDB(filters, hidden_channel, kernel, act, add_rate=add_rate))
+            forward_net.append(RDB(filters, hidden_channel, kernel, act, add_rate=add_rate, use_BN=use_BN))
         self.net = nn.Sequential(*forward_net)
         self.add_rate = add_rate
 
@@ -609,11 +617,44 @@ class ResNet(nn.Module):
         return inputs
 
 
+class EResNet(nn.Module):
+    def __init__(self, num_block_resnet=16, add_rate=0.2):
+        super().__init__()
+
+        self.conv0 = ConvWithoutBN(3, 64, 9, 1, None, act=nn.LeakyReLU(0.2))
+        residual = [RRDB(64, 3,
+                         act=nn.LeakyReLU(0.2), add_rate=add_rate, use_BN=False) for _ in range(num_block_resnet)]
+        # residual = [ResidualBlock1(64, 64, 64, 3, nn.PReLU(2)) for _ in range(num_block_resnet)]
+        self.residual = nn.Sequential(*residual)
+
+        self.conv1 = ConvWithoutBN(64, 64, 3, 1, None, act=False)
+        scaler = [Scaler(64, 64,
+                         2, 3,
+                         nn.LeakyReLU(0.2)) for _ in range(2)]
+        self.scaler = nn.Sequential(*scaler)
+        self.conv2 = ConvWithoutBN(64, 3, 9, 1, act=nn.Tanh())
+
+        for x in self.modules():
+            if isinstance(x, nn.Conv2d):
+                x.weight.data *= 0.2
+
+        for x in self.modules():
+            if hasattr(x, "inplace"):
+                x.inplace = True
+
+    def forward(self, inputs: torch.Tensor):
+        inputs = self.conv0(inputs)
+        inputs = inputs + self.conv1(self.residual(inputs))
+        inputs = self.scaler(inputs)
+        inputs = self.conv2(inputs)
+        return inputs
+
+
 class SRGAN(nn.Module):
 
-    def __init__(self, deep, add_rate):
+    def __init__(self, deep, add_rate, enchant=False):
         super().__init__()
-        self.res_net = ResNet(deep, add_rate)
+        self.res_net = EResNet(deep, add_rate) if enchant else ResNet(deep, add_rate)
 
     def init_weight(self, pretrained):
         ckpt = torch.load(pretrained, "cpu")
@@ -724,11 +765,10 @@ if __name__ == '__main__':
     except Exception as ex:
         device = torch.device(0) if torch.cuda.is_available() else "cpu"
     device = "cpu"
-    model = Model(SRGAN(23, 0.2))
-    model.to(device)
+    model = Model(SRGAN(23, 0.2, enchant=True))
 
     # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
-    ckpt = torch.load("../gen_RRDB_23_0.2.pt", "cpu")
+    ckpt = torch.load("../gen_ERRDB_23_0.2.pt", "cpu")
     loss = ckpt['loss']
     import numpy as np
 
@@ -740,6 +780,7 @@ if __name__ == '__main__':
     model.eval().fuse()
 
     feed = torch.zeros([1, 3, 96, 96], dtype=torch.uint8, device=device)
+    model.to(device)
 
     if torch.cuda.is_available():
         model.half()
