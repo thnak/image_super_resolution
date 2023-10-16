@@ -460,7 +460,7 @@ class TruncatedVGG19(nn.Module):
     Used to calculate the MSE loss in this VGG feature-space, i.e. the VGG loss.
     """
 
-    def __init__(self, i, j):
+    def __init__(self, i, j, beforeActivation=True):
         """
         :param i: the index i in the definition above
         :param j: the index j in the definition above
@@ -494,7 +494,8 @@ class TruncatedVGG19(nn.Module):
             raise "One or both of i=%d and j=%d are not valid choices for the VGG19!" % (i, j)
 
         # Truncate to the jth convolution (+ activation) before the ith maxpool layer
-        self.truncated_vgg19 = nn.Sequential(*list(vgg19.features.children())[:truncate_at + 1])
+        pad = 0 if beforeActivation else 1
+        self.truncated_vgg19 = nn.Sequential(*list(vgg19.features.children())[:truncate_at + pad])
         for x in self.modules():
             if hasattr(x, "inplace"):
                 x.inplace = True
@@ -669,11 +670,11 @@ class Denoise(nn.Module):
     def __init__(self, residual_blocks):
         super().__init__()
 
-        self.conv0 = nn.Sequential(Conv(3, 64, 9, 1, act=nn.LeakyReLU(0.2)))
+        self.conv0 = nn.Sequential(ConvWithoutBN(3, 64, 9, 1, act=nn.LeakyReLU(0.2)))
         self.residual_0 = nn.Sequential(*[ResidualBlock1(64, 64,
                                                          64, 3,
                                                          act=nn.LeakyReLU(0.2)) for _ in range(residual_blocks // 2)])
-        self.residual_conv0 = Conv(64, 256, 3, 2, act=nn.LeakyReLU(0.2))
+        self.residual_conv0 = ConvWithoutBN(64, 256, 3, 2, act=nn.LeakyReLU(0.2))
         self.residual_1 = nn.Sequential(*[ResidualBlock1(256,
                                                          256,
                                                          256, 3,

@@ -348,7 +348,7 @@ if __name__ == '__main__':
                     if res_checkpoints.is_file():
                         gen_net.res_net.load_state_dict(torch.load(res_checkpoints, "cpu")['gen_net'], strict=False)
 
-            compute_loss = gen_loss(device=device)
+            compute_loss = gen_loss(device=device, beforeAct=opt.enchant)
 
             gen_net.to(device)
             dis_net.to(device)

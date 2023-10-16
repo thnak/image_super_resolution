@@ -4,8 +4,8 @@ from utils.models import TruncatedVGG19
 
 
 class gen_loss:
-    def __init__(self, vgg_i=5, vgg_j=4, beta=1e-3, device='cuda'):
-        self.vgg_net = TruncatedVGG19(vgg_i, vgg_j).to(device)
+    def __init__(self, vgg_i=5, vgg_j=4, beta=1e-3, device='cuda', beforeAct=False):
+        self.vgg_net = TruncatedVGG19(vgg_i, vgg_j, beforeAct).to(device)
         for x in self.vgg_net.parameters():
             x.requires_grad = False
         self.vgg_net.eval()
