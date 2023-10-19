@@ -546,8 +546,9 @@ class Discriminator(nn.Module):
 
         # An adaptive pool layer that resizes it to a standard size
         # For the default input size of 96 and 8 convolutional blocks, this will have no effect
-        self.adaptive_pool = nn.AdaptiveAvgPool2d((6, 6))
-        self.fc1 = nn.Sequential(nn.Linear(out_channels * 6 * 6, fc_size), nn.LeakyReLU(0.2))
+        self.adaptive_pool = nn.AdaptiveAvgPool2d((2, 2))
+        # self.fc1 = nn.Sequential(nn.Linear(out_channels * 4 ** 2, fc_size), nn.LeakyReLU(0.2))
+        self.fc1 = FullyConnected(out_channels * 2**2, fc_size, nn.LeakyReLU(0.2))
         self.fc2 = nn.Linear(fc_size, 1)
 
         for x in self.modules():
@@ -766,10 +767,10 @@ if __name__ == '__main__':
     except Exception as ex:
         device = torch.device(0) if torch.cuda.is_available() else "cpu"
     device = "cpu"
-    model = Model(SRGAN(23, 0.2, enchant=True))
+    model = Model(SRGAN(23, 0.2, enchant=False))
 
     # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
-    ckpt = torch.load("../gen_ERRDB_23_0.2.pt", "cpu")
+    ckpt = torch.load("../gen_RRDB_23_0.2.pt", "cpu")
     loss = ckpt['loss']
     import numpy as np
 
