@@ -659,8 +659,11 @@ class SRGAN(nn.Module):
         self.res_net = EResNet(deep, add_rate) if enchant else ResNet(deep, add_rate)
 
     def init_weight(self, pretrained):
-        ckpt = torch.load(pretrained, "cpu")
-        self.res_net.load_state_dict(ckpt['ema'].float().state_dict())
+        try:
+            ckpt = torch.load(pretrained, "cpu")
+            self.res_net.load_state_dict(ckpt['ema'].float().state_dict())
+        except:
+            print(f"Could not load Res checkpoint.")
 
     def forward(self, inputs: torch.Tensor):
         inputs = self.res_net(inputs)
