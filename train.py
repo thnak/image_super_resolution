@@ -159,6 +159,7 @@ if __name__ == '__main__':
     parser.add_argument("--seed", type=int, default=100)
     parser.add_argument("--add_rate", type=float, default=0.2)
     parser.add_argument("--enchant", action="store_true")
+    parser.add_argument("--tpu", action="store_true")
 
     opt = parser.parse_args()
     first_setup(opt.seed)
@@ -174,12 +175,18 @@ if __name__ == '__main__':
     denoise_checkpoints = work_dir / denoise_checkpoints
     tensorBoard = SummaryWriter(work_dir.as_posix(), comment=opt.save_name, flush_secs=30, max_queue=200)
 
-    if opt.dml:
-        import torch_directml
+    if opt.tpu:
+        import torch_xla
+        import torch_xla.core.xla_model as xm
 
-        device = torch_directml.device(0)
+        device = xm.xla_device()
     else:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if opt.dml:
+            import torch_directml
+
+            device = torch_directml.device(0)
+        else:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     lr = opt.lr
     epochs = opt.epochs
     weight_decay = opt.weight_decay
