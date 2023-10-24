@@ -1,11 +1,12 @@
 import random
 from typing import Union
 
-import PIL.Image
 import cv2
 import numpy as np
 import torch
 import torchvision.transforms
+from albumentations.pytorch import ToTensorV2
+
 from torch.utils.data import Dataset, DataLoader
 from torch.nn import Module
 from torchvision.transforms import InterpolationMode, Lambda, Compose
@@ -15,7 +16,7 @@ import json
 from pathlib import Path
 from tqdm import tqdm
 from PIL import Image
-
+import albumentations
 from utils.general import ground_up, convert_image_to_jpg
 
 
@@ -101,6 +102,7 @@ class PIL_to_tanh(Module):
         if inputs.dtype == torch.uint8:
             inputs = inputs.to(dtype=self.max_pixel_value.dtype)
             inputs /= self.max_pixel_value
+
         return 2. * inputs - 1.
 
 
@@ -244,6 +246,31 @@ def image_reader(image_dir: Union[Path, str], shape: int, scale: int):
     return hr_image, lr_image
 
 
+def opencv_image_reader(image_dir: Union[Path, str], shape: int, scale: int):
+    image = cv2.imread(image_dir)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    h, w, cv2 = image.shape
+
+    lr_shape = shape // scale
+    left = random.randint(1, w - shape)
+    bottom = random.randint(1, h - shape)
+    right = left + shape
+    top = bottom + shape
+    image = image.crop((left, bottom, right, top))
+    image = image[left:right, bottom:top]
+
+    ran_float = random.random()
+    if ran_float < 0.3:
+        interpolation = cv2.INTER_LINEAR
+    elif ran_float < 0.6:
+        interpolation = cv2.INTER_CUBIC
+    else:
+        interpolation = cv2.INTER_AREA
+
+    resized = cv2.resize(image.copy(), (lr_shape, lr_shape), interpolation=interpolation)
+    return image, resized
+
+
 class SR_dataset(Dataset):
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
@@ -259,7 +286,19 @@ class SR_dataset(Dataset):
         self.scale_factor = scales_factor
         if calculateNorm:
             self.calculateNormValues()
-        self.transform_lr = torchvision.transforms.Normalize(mean=self.mean, std=self.std, inplace=True)
+        self.croper = albumentations.RandomCrop(target_size, target_size)
+
+        self.transform_lr = albumentations.Compose([
+            albumentations.ISONoise(p=0.1),
+            albumentations.ImageCompression(p=0.1, quality_lower=65, quality_upper=75),
+            albumentations.Blur(p=0.05),
+            albumentations.GaussianBlur(p=0.05),
+            albumentations.MotionBlur(p=0.05),
+            albumentations.MedianBlur(p=0.05),
+            albumentations.Resize(target_size // scales_factor, target_size // scales_factor),
+            albumentations.Normalize(self.mean, self.std),
+            ToTensorV2(True)
+        ])
         self.transform_hr = PIL_to_tanh()
 
     def calculateNormValues(self):
@@ -295,12 +334,21 @@ class SR_dataset(Dataset):
 
     def set_transform_hr(self):
         """set transform for srgen"""
-        self.transform_hr = torchvision.transforms.Normalize(mean=self.mean, std=self.std, inplace=True)
+        self.transform_hr = albumentations.Compose([albumentations.Normalize(mean=self.mean, std=self.std), ToTensorV2(True)])
         return self
 
     def __getitem__(self, item):
-        hr_image, lr_image = image_reader(self.samples[item], self.target_size, self.scale_factor)
-        return self.transform_hr(hr_image), self.transform_lr(lr_image)
+        image = cv2.imread(self.samples[item])
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image = self.croper(image=image)["image"]
+
+        if isinstance(self.transform_hr, albumentations.Compose):
+            return self.transform_hr(image=image.copy())["image"], self.transform_lr(image=image.copy())["image"]
+
+        hr_image = torch.from_numpy(image.copy())
+        hr_image = torch.permute(hr_image, [2, 0, 1])
+        hr_image = self.transform_hr(hr_image)
+        return hr_image, self.transform_lr(image=image.copy())["image"]
 
     def __len__(self):
         return len(self.samples)

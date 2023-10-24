@@ -247,10 +247,9 @@ if __name__ == '__main__':
             dataset = dataset.set_transform_hr()
         dataloader = init_dataloader(dataset, batch_size=batch_size, num_worker=workers)[0]
         if not opt.resume:
-            denorm = DeNormalize(mean=dataset.mean, std=dataset.std)
             for idx, (hr, lr) in enumerate(dataloader):
-                tensorBoard.add_images("images/hr", denorm(hr), idx)
-                tensorBoard.add_images("images/lr", denorm(lr), idx)
+                tensorBoard.add_images("images/hr", hr, idx)
+                tensorBoard.add_images("images/lr", lr, idx)
                 if idx == 10:
                     del hr, lr
                     break
@@ -271,7 +270,7 @@ if __name__ == '__main__':
             start_epoch = 0
             n_P = sum([x.numel() for x in model.parameters()])
             n_g = sum(x.numel() for x in model.parameters() if x.requires_grad)  # number gradients
-            print(f"{prefix} {epochs} epochs, {n_P:,} parameters, {n_g:,} gradients")
+            print(f"{prefix}ResNet {epochs} epochs, {n_P:,} parameters, {n_g:,} gradients")
             if opt.resume:
                 if res_checkpoints.is_file():
                     ckpt = torch.load(res_checkpoints.as_posix(), 'cpu')
