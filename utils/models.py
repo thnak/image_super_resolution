@@ -623,16 +623,16 @@ class EResNet(nn.Module):
     def __init__(self, num_block_resnet=16, add_rate=0.2):
         super().__init__()
 
-        self.conv0 = ConvWithoutBN(3, 64, 9, 1, None, act=nn.LeakyReLU(0.2))
+        self.conv0 = ConvWithoutBN(3, 64, 9, 1, None, act=nn.PReLU(2))
         residual = [RRDB(64, 3,
-                         act=nn.LeakyReLU(0.2), add_rate=add_rate, use_BN=False) for _ in range(num_block_resnet)]
+                         act=nn.PReLU(2), add_rate=add_rate, use_BN=False) for _ in range(num_block_resnet)]
         # residual = [ResidualBlock1(64, 64, 64, 3, nn.PReLU(2)) for _ in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = ConvWithoutBN(64, 64, 3, 1, None, act=False)
         scaler = [Scaler(64, 64,
                          2, 3,
-                         nn.LeakyReLU(0.2)) for _ in range(2)]
+                         nn.PReLU(2)) for _ in range(2)]
         self.scaler = nn.Sequential(*scaler)
         self.conv2 = ConvWithoutBN(64, 3, 9, 1, act=nn.Tanh())
 
@@ -640,7 +640,6 @@ class EResNet(nn.Module):
             if isinstance(x, nn.Conv2d):
                 x.weight.data *= 0.2
 
-        for x in self.modules():
             if hasattr(x, "inplace"):
                 x.inplace = True
 
