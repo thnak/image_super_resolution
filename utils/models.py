@@ -661,6 +661,7 @@ class SRGAN(nn.Module):
         try:
             ckpt = torch.load(pretrained, "cpu")
             self.res_net.load_state_dict(ckpt['ema'].float().state_dict())
+            print("loaded pre-trained of Resnet")
         except:
             print(f"Could not load Res checkpoint.")
 
@@ -769,7 +770,7 @@ if __name__ == '__main__':
     except Exception as ex:
         device = torch.device(0) if torch.cuda.is_available() else "cpu"
     device = "cpu"
-    model = Model(SRGAN(23, 0.2, enchant=False))
+    model = Model(SRGAN(23, 0.2, enchant=True))
 
     # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
     ckpt = torch.load("../gen_RRDB_23_0.2.pt", "cpu")
