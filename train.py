@@ -97,7 +97,7 @@ def train_srgan(gen_net: SRGAN, ema: ModelEMA, dis_net: Discriminator, dataloade
             sr_images = (sr_images - mean) / std
             sr_discriminated = dis_net(sr_images)
             perceptual_loss, adversarial_loss_, content_loss = compute_loss.calc_contentLoss(sr_images, hr_images,
-                                                                                            sr_discriminated)
+                                                                                             sr_discriminated)
         optimizer_g.zero_grad()
         gradscaler_gen.scale(perceptual_loss).backward()
         gradscaler_gen.unscale_(optimizer_g)
@@ -261,7 +261,7 @@ if __name__ == '__main__':
             ema = ModelEMA(model, tau=epochs * len(dataloader))
             tensorBoard.add_graph(model, torch.zeros([2, 3, 96, 96]))
             model.to(device)
-            compute_loss = nn.MSELoss()
+            compute_loss = nn.L1Loss() if opt.enchant else nn.MSELoss()
             optimizer = torch.optim.Adam(params=model.parameters(), lr=opt.lr, betas=(0.9, 0.999),
                                          weight_decay=weight_decay)
 

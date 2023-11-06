@@ -62,18 +62,21 @@ def create_data_lists(train_folders, test_folders, min_size, output_folder="./",
     for d in train_folders:
         for i in Path(d).rglob('*'):
             if i.suffix in IMG_FORMATS:
-                image = Image.open(i.as_posix())
-                if image.width < min_size or image.height < min_size:
-                    if verbose:
-                        print(f"ignore small image {i.as_posix()} require {min_size}")
-                    image.close()
-                    i.unlink(True)
-                else:
-                    try:
-                        image.verify()
-                    except:
-                        continue
-                    train_images.append(i.as_posix())
+                try:
+                    image = Image.open(i.as_posix())
+                    if image.width < min_size or image.height < min_size:
+                        if verbose:
+                            print(f"ignore small image {i.as_posix()} require {min_size}")
+                        image.close()
+                        i.unlink(True)
+                    else:
+                        try:
+                            image.verify()
+                        except:
+                            continue
+                        train_images.append(i.as_posix())
+                except:
+                    pass
 
     print("There are %d images in the training data.\n" % len(train_images))
     save_dir = Path(output_folder)

@@ -289,12 +289,15 @@ class SR_dataset(Dataset):
         self.croper = albumentations.RandomCrop(target_size, target_size)
 
         self.transform_lr = albumentations.Compose([
-            albumentations.ISONoise(p=0.1),
-            albumentations.ImageCompression(p=0.1, quality_lower=65, quality_upper=75),
+            albumentations.ISONoise(p=0.05),
+            albumentations.ImageCompression(p=0.05, quality_lower=65, quality_upper=75),
             albumentations.Blur(p=0.05),
             albumentations.GaussianBlur(p=0.05),
-            albumentations.MotionBlur(p=0.05),
-            albumentations.MedianBlur(p=0.05),
+            albumentations.GaussNoise(p=0.05),
+            albumentations.ImageCompression(p=0.1, quality_lower=45, quality_upper=75),
+            albumentations.MotionBlur(p=0.1),
+            albumentations.GaussNoise(p=0.1),
+            albumentations.MedianBlur(p=0.1),
             albumentations.Resize(target_size // scales_factor, target_size // scales_factor),
             albumentations.Normalize(self.mean, self.std),
             ToTensorV2(True)

@@ -9,7 +9,7 @@ class gen_loss:
         for x in self.vgg_net.parameters():
             x.requires_grad = False
         self.vgg_net.eval()
-        self.mse = nn.MSELoss()
+        self.mse = nn.L1Loss() if beforeAct else nn.MSELoss()
         self.bce = nn.BCEWithLogitsLoss()
         self.beta = beta
 

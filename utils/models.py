@@ -770,7 +770,7 @@ if __name__ == '__main__':
     except Exception as ex:
         device = torch.device(0) if torch.cuda.is_available() else "cpu"
     device = "cpu"
-    model = Model(SRGAN(23, 0.2, enchant=True))
+    model = Model(SRGAN(23, 0.2, True))
 
     # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
     ckpt = torch.load("../gen_RRDB_23_0.2.pt", "cpu")
