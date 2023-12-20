@@ -298,6 +298,7 @@ class SR_dataset(Dataset):
             albumentations.MotionBlur(p=0.1),
             albumentations.GaussNoise(p=0.1),
             albumentations.MedianBlur(p=0.1),
+            # albumentations.ToGray(),
             albumentations.Resize(target_size // scales_factor, target_size // scales_factor),
             albumentations.Normalize(self.mean, self.std),
             ToTensorV2(True)

@@ -242,7 +242,7 @@ if __name__ == '__main__':
                         "std": dataset.std}, denoise_checkpoints.as_posix())
 
     else:
-        dataset = SR_dataset(json_file, opt.shape, 4, opt.mean, "Train: ")
+        dataset = SR_dataset(json_file, opt.shape, 2, opt.mean, "Train: ")
         if not opt.resnet:
             dataset = dataset.set_transform_hr()
         dataloader = init_dataloader(dataset, batch_size=batch_size, num_worker=workers)[0]

@@ -603,7 +603,7 @@ class ResNet(nn.Module):
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
         scaler = [Scaler(64, 64,
                          2, 3,
-                         nn.LeakyReLU(0.2)) for _ in range(2)]
+                         nn.LeakyReLU(0.2)) for _ in range(1)]
         self.scaler = nn.Sequential(*scaler)
         self.conv2 = ConvWithoutBN(64, 3, 9, 1, act=nn.Tanh())
 
@@ -770,21 +770,21 @@ if __name__ == '__main__':
     except Exception as ex:
         device = torch.device(0) if torch.cuda.is_available() else "cpu"
     device = "cpu"
-    model = Model(SRGAN(23, 0.2, True))
+    model = Model(ResNet(2, 0.2))
 
     # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
-    ckpt = torch.load("../gen_RRDB_23_0.2.pt", "cpu")
-    loss = ckpt['loss']
-    import numpy as np
-
-    print(np.mean(loss))
-    model.net.load_state_dict(ckpt['ema'].float().state_dict())
-    model.init_normalize(ckpt['mean'], ckpt['std'])
+    # ckpt = torch.load("../res_RRDB_23_0.2.pt", "cpu")
+    # loss = ckpt['loss']
+    # import numpy as np
+    #
+    # print(np.mean(loss))
+    # model.net.load_state_dict(ckpt['ema'].float().state_dict())
+    # model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False
     model.eval().fuse()
 
-    feed = torch.zeros([1, 3, 96, 96], dtype=torch.uint8, device=device)
+    feed = torch.zeros([1, 3, 96, 96], dtype=torch.float32, device=device)
     model.to(device)
 
     if torch.cuda.is_available():
