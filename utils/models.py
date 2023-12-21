@@ -202,9 +202,8 @@ class ConvWithoutBN(nn.Module):
 class ResidualBlock1(nn.Module):
     def __init__(self, in_channel: int, out_channel: int, hidden_channel: int, kernel: any, act: any):
         super(ResidualBlock1, self).__init__()
-        self.m = nn.Sequential(
-            Conv(in_channel, hidden_channel, kernel, 1, None, act=act),
-            Conv(hidden_channel, out_channel, kernel, 1, None, act=False))
+        self.m = nn.Sequential(Conv(in_channel, hidden_channel, kernel, 1, None, act=act),
+                               Conv(hidden_channel, out_channel, kernel, 1, None, act=False))
 
     def forward(self, inputs: torch.Tensor):
         return inputs + self.m(inputs)
@@ -591,19 +590,19 @@ class Scaler(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, num_block_resnet=16, add_rate=0.2):
+    def __init__(self, num_block_resnet=16, add_rate=0.2, scaleRate = 2):
         super().__init__()
-
+        scaleRate /= 2
         self.conv0 = ConvWithoutBN(3, 64, 9, 1, None, act=nn.LeakyReLU(0.2))
-        residual = [RRDB(64, 3,
-                         act=nn.LeakyReLU(0.2), add_rate=add_rate) for _ in range(num_block_resnet)]
-        # residual = [ResidualBlock1(64, 64, 64, 3, nn.PReLU(2)) for _ in range(num_block_resnet)]
+        # residual = [RRDB(64, 3,
+        #                  act=nn.LeakyReLU(0.2), add_rate=add_rate) for _ in range(num_block_resnet)]
+        residual = [ResidualBlock1(64, 64, 64, 3, nn.PReLU(2)) for _ in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
         scaler = [Scaler(64, 64,
                          2, 3,
-                         nn.LeakyReLU(0.2)) for _ in range(1)]
+                         nn.LeakyReLU(0.2)) for _ in range(scaleRate)]
         self.scaler = nn.Sequential(*scaler)
         self.conv2 = ConvWithoutBN(64, 3, 9, 1, act=nn.Tanh())
 
@@ -653,9 +652,9 @@ class EResNet(nn.Module):
 
 class SRGAN(nn.Module):
 
-    def __init__(self, deep, add_rate, enchant=False):
+    def __init__(self, deep, add_rate, enchant=False, scaleRate = 2):
         super().__init__()
-        self.res_net = EResNet(deep, add_rate) if enchant else ResNet(deep, add_rate)
+        self.res_net = EResNet(deep, add_rate) if enchant else ResNet(deep, add_rate, scaleRate=scaleRate)
 
     def init_weight(self, pretrained):
         try:
@@ -770,21 +769,21 @@ if __name__ == '__main__':
     except Exception as ex:
         device = torch.device(0) if torch.cuda.is_available() else "cpu"
     device = "cpu"
-    model = Model(ResNet(2, 0.2))
+    model = Model(SRGAN(16, 0.2))
 
     # /content/drive/MyDrive/Colab Notebooks/res_checkpoint.pt
-    # ckpt = torch.load("../res_RRDB_23_0.2.pt", "cpu")
-    # loss = ckpt['loss']
-    # import numpy as np
-    #
-    # print(np.mean(loss))
-    # model.net.load_state_dict(ckpt['ema'].float().state_dict())
-    # model.init_normalize(ckpt['mean'], ckpt['std'])
+    ckpt = torch.load("../gen_RRDB_16_0.2.pt", "cpu")
+    loss = ckpt['loss']
+    import numpy as np
+
+    print(np.mean(loss))
+    model.net.load_state_dict(ckpt['ema'].float().state_dict())
+    model.init_normalize(ckpt['mean'], ckpt['std'])
     for x in model.parameters():
         x.requires_grad = False
     model.eval().fuse()
 
-    feed = torch.zeros([1, 3, 96, 96], dtype=torch.float32, device=device)
+    feed = torch.zeros([1, 3, 96, 96], dtype=torch.uint8, device=device)
     model.to(device)
 
     if torch.cuda.is_available():

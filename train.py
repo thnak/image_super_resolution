@@ -140,6 +140,7 @@ def first_setup(seed):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--resnet", action="store_true")
+    parser.add_argument("--scale", type=int, default=2)
     parser.add_argument("--train_denoise", action="store_true")
     parser.add_argument("--worker", type=int, default=2)
     parser.add_argument("--batch_size", type=int, default=16)
@@ -255,7 +256,7 @@ if __name__ == '__main__':
                     break
         prefix = "Train: "
         if opt.resnet:
-            model = EResNet(opt.rs_deep, opt.add_rate) if opt.enchant else ResNet(opt.rs_deep, opt.add_rate)
+            model = EResNet(opt.rs_deep, opt.add_rate) if opt.enchant else ResNet(opt.rs_deep, opt.add_rate, scaleRate=opt.scale)
             for x in model.parameters():
                 x.requires_grad = True
             ema = ModelEMA(model, tau=epochs * len(dataloader))
@@ -302,7 +303,7 @@ if __name__ == '__main__':
                            res_checkpoints.as_posix())
 
         else:
-            gen_net = SRGAN(opt.rs_deep, opt.add_rate, opt.enchant)
+            gen_net = SRGAN(opt.rs_deep, opt.add_rate, opt.enchant, opt.scale)
             gen_net.init_weight(pretrained=res_checkpoints.as_posix())
             dis_net = Discriminator(3, 64, 8, 1024)
             ema = ModelEMA(gen_net, tau=epochs * len(dataloader))

@@ -9,7 +9,7 @@ class gen_loss:
         for x in self.vgg_net.parameters():
             x.requires_grad = False
         self.vgg_net.eval()
-        self.mse = nn.L1Loss() if beforeAct else nn.MSELoss()
+        self.mse = L1Loss() if beforeAct else nn.MSELoss()
         self.bce = nn.BCEWithLogitsLoss()
         self.beta = beta
 
@@ -27,3 +27,12 @@ class gen_loss:
         return self.bce(sr_discriminated,
                         torch.zeros_like(sr_discriminated)) + self.bce(hr_discriminated,
                                                                        torch.ones_like(hr_discriminated))
+
+
+class L1Loss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.criterion = nn.L1Loss()
+
+    def forward(self, inputs, ground_truth):
+        return torch.sum(torch.mul(1.0, self.criterion(inputs, ground_truth)))
