@@ -592,7 +592,7 @@ class Scaler(nn.Module):
 class ResNet(nn.Module):
     def __init__(self, num_block_resnet=16, add_rate=0.2, scaleRate = 2):
         super().__init__()
-        scaleRate /= 2
+        scaleRate = scaleRate // 2
         self.conv0 = ConvWithoutBN(3, 64, 9, 1, None, act=nn.LeakyReLU(0.2))
         # residual = [RRDB(64, 3,
         #                  act=nn.LeakyReLU(0.2), add_rate=add_rate) for _ in range(num_block_resnet)]
