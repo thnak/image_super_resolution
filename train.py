@@ -256,7 +256,7 @@ if __name__ == '__main__':
                     break
         prefix = "Train: "
         if opt.resnet:
-            model = EResNet(opt.rs_deep, opt.add_rate) if opt.enchant else ResNet(opt.rs_deep, opt.add_rate, scaleRate=opt.scale)
+            model = EResNet(opt.rs_deep, opt.add_rate, opt.scale) if opt.enchant else ResNet(opt.rs_deep, opt.add_rate, scaleRate=opt.scale)
             for x in model.parameters():
                 x.requires_grad = True
             ema = ModelEMA(model, tau=epochs * len(dataloader))

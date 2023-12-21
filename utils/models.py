@@ -619,9 +619,9 @@ class ResNet(nn.Module):
 
 
 class EResNet(nn.Module):
-    def __init__(self, num_block_resnet=16, add_rate=0.2):
+    def __init__(self, num_block_resnet=16, add_rate=0.2, scaleRate=2):
         super().__init__()
-
+        scaleRate = scaleRate // 2
         self.conv0 = ConvWithoutBN(3, 64, 9, 1, None, act=nn.PReLU(2))
         residual = [RRDB(64, 3,
                          act=nn.PReLU(2), add_rate=add_rate, use_BN=False) for _ in range(num_block_resnet)]
@@ -631,7 +631,7 @@ class EResNet(nn.Module):
         self.conv1 = ConvWithoutBN(64, 64, 3, 1, None, act=False)
         scaler = [Scaler(64, 64,
                          2, 3,
-                         nn.PReLU(2)) for _ in range(2)]
+                         nn.PReLU(2)) for _ in range(scaleRate)]
         self.scaler = nn.Sequential(*scaler)
         self.conv2 = ConvWithoutBN(64, 3, 9, 1, act=nn.Tanh())
 
@@ -654,7 +654,7 @@ class SRGAN(nn.Module):
 
     def __init__(self, deep, add_rate, enchant=False, scaleRate = 2):
         super().__init__()
-        self.res_net = EResNet(deep, add_rate) if enchant else ResNet(deep, add_rate, scaleRate=scaleRate)
+        self.res_net = EResNet(deep, add_rate, scaleRate) if enchant else ResNet(deep, add_rate, scaleRate=scaleRate)
 
     def init_weight(self, pretrained):
         try:
