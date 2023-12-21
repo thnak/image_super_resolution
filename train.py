@@ -19,7 +19,7 @@ from tqdm import tqdm
 from utils.models import ResNet, EResNet, SRGAN, Discriminator, Denoise, ModelEMA, ConvertTanh2Norm
 from utils.general import intersect_dicts
 from utils.datasets import SR_dataset, init_dataloader, Noisy_dataset, DeNormalize
-from utils.loss import gen_loss
+from utils.loss import gen_loss, L1Loss
 from torch.utils.tensorboard import SummaryWriter
 
 
@@ -63,7 +63,7 @@ def train(model: any, ema: ModelEMA, dataloader, compute_loss: MSELoss, optimize
             ema.update(model)
             losses.append(loss.item())
             tensorBoard.add_scalar("loss", loss.item(), epoch * total + idx + 1)
-        pbar.desc = f"Epoch [{epoch}]..."
+        pbar.desc = f"Epoch [{epoch}][{loss.item()}]..."
     return losses
 
 
@@ -262,7 +262,7 @@ if __name__ == '__main__':
             ema = ModelEMA(model, tau=epochs * len(dataloader))
             tensorBoard.add_graph(model, torch.zeros([2, 3, 96, 96]))
             model.to(device)
-            compute_loss = nn.L1Loss() if opt.enchant else nn.MSELoss()
+            compute_loss = L1Loss() if opt.enchant else nn.MSELoss()
             optimizer = torch.optim.Adam(params=model.parameters(), lr=opt.lr, betas=(0.9, 0.999),
                                          weight_decay=weight_decay)
 
