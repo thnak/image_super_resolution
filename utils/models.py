@@ -594,15 +594,15 @@ class ResNet(nn.Module):
         super().__init__()
         scaleRate = scaleRate // 2
         self.conv0 = ConvWithoutBN(3, 64, 9, 1, None, act=nn.LeakyReLU(0.2))
-        # residual = [RRDB(64, 3,
-        #                  act=nn.LeakyReLU(0.2), add_rate=add_rate) for _ in range(num_block_resnet)]
-        residual = [ResidualBlock1(64, 64, 64, 3, nn.PReLU(2)) for _ in range(num_block_resnet)]
+        residual = [RRDB(64, 3,
+                         act=nn.PReLU(2), add_rate=add_rate) for _ in range(num_block_resnet)]
+        # residual = [ResidualBlock1(64, 64, 64, 3, nn.PReLU(2)) for _ in range(num_block_resnet)]
         self.residual = nn.Sequential(*residual)
 
         self.conv1 = Conv(64, 64, 3, 1, None, act=False)
         scaler = [Scaler(64, 64,
                          2, 3,
-                         nn.LeakyReLU(0.2)) for _ in range(scaleRate)]
+                         nn.PReLU(2)) for _ in range(scaleRate)]
         self.scaler = nn.Sequential(*scaler)
         self.conv2 = ConvWithoutBN(64, 3, 9, 1, act=nn.Tanh())
 
