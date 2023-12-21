@@ -30,9 +30,10 @@ class gen_loss:
 
 
 class L1Loss(nn.Module):
-    def __init__(self):
+    def __init__(self, lossweight=1):
         super().__init__()
+        self.loss_weight = torch.tensor([lossweight])
         self.criterion = nn.L1Loss()
 
     def forward(self, inputs, ground_truth):
-        return torch.sum(torch.mul(1.0, self.criterion(inputs, ground_truth)))
+        return torch.sum(torch.mul(self.loss_weight, self.criterion(inputs, ground_truth)))
