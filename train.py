@@ -243,7 +243,7 @@ if __name__ == '__main__':
                         "std": dataset.std}, denoise_checkpoints.as_posix())
 
     else:
-        dataset = SR_dataset(json_file, opt.shape, 2, opt.mean, "Train: ")
+        dataset = SR_dataset(json_file, opt.shape, opt.scale, opt.mean, "Train: ")
         if not opt.resnet:
             dataset = dataset.set_transform_hr()
         dataloader = init_dataloader(dataset, batch_size=batch_size, num_worker=workers)[0]
@@ -260,9 +260,9 @@ if __name__ == '__main__':
             for x in model.parameters():
                 x.requires_grad = True
             ema = ModelEMA(model, tau=epochs * len(dataloader))
-            tensorBoard.add_graph(model, torch.zeros([2, 3, 96, 96]))
+            tensorBoard.add_graph(model, torch.zeros([batch_size, 3, opt.shape, opt.shape]))
             model.to(device)
-            compute_loss = L1Loss() if opt.enchant else nn.MSELoss()
+            compute_loss = L1Loss().to(device) if opt.enchant else nn.MSELoss()
             optimizer = torch.optim.Adam(params=model.parameters(), lr=opt.lr, betas=(0.9, 0.999),
                                          weight_decay=weight_decay)
 
