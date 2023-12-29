@@ -424,7 +424,7 @@ class Noisy_dataset(Dataset):
 
 def init_dataloader(dataset, batch_size=16, shuffle=True, num_worker=2):
     train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_worker,
-                              pin_memory=True)  # note that we're passing the collate function here
+                              pin_memory=False)  # note that we're passing the collate function here
     return train_loader, dataset
 
 

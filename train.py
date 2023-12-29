@@ -260,7 +260,6 @@ if __name__ == '__main__':
             for x in model.parameters():
                 x.requires_grad = True
             ema = ModelEMA(model, tau=epochs * len(dataloader))
-            tensorBoard.add_graph(model, torch.zeros([batch_size, 3, opt.shape, opt.shape]))
             model.to(device)
             compute_loss = L1Loss().to(device) if opt.enchant else nn.MSELoss()
             optimizer = torch.optim.Adam(params=model.parameters(), lr=opt.lr, betas=(0.9, 0.999),
